@@ -1,6 +1,6 @@
 services:
   gateway:
-    image: ghcr.io/newyorkthink/docker-images-hermes-agent:latest
+    image: ghcr.io/newyorkthink/hermes-agent:latest
     container_name: hermes
     hostname: hermes
     restart: unless-stopped

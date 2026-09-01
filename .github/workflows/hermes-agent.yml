@@ -50,7 +50,7 @@ jobs:
           set -euo pipefail
 
           upstream_image="docker.io/nousresearch/hermes-agent:latest"
-          target_image="ghcr.io/newyorkthink/docker-images-hermes-agent:latest"
+          target_image="ghcr.io/newyorkthink/hermes-agent:latest"
 
           upstream_digest="$(docker buildx imagetools inspect "${upstream_image}" --format '{{json .Manifest}}' | jq -r '.digest // empty')"
           [[ "${upstream_digest}" == sha256:* ]] || {
@@ -93,7 +93,7 @@ jobs:
           pull: true
           no-cache: ${{ github.event_name == 'workflow_dispatch' }}
           platforms: linux/amd64
-          tags: ghcr.io/newyorkthink/docker-images-hermes-agent:latest
+          tags: ghcr.io/newyorkthink/hermes-agent:latest
           labels: org.opencontainers.image.source=https://github.com/newyorkthink/docker_images
           build-args: |
             UPSTREAM_DIGEST=${{ steps.upstream.outputs.digest }}

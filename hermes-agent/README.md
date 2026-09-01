@@ -31,16 +31,16 @@
 GHCR：
 
 ```text
-ghcr.io/newyorkthink/docker-images-hermes-agent:latest
+ghcr.io/newyorkthink/hermes-agent:latest
 ```
 
 拉取：
 
 ```bash
-docker pull ghcr.io/newyorkthink/docker-images-hermes-agent:latest
+docker pull ghcr.io/newyorkthink/hermes-agent:latest
 ```
 
-该 GHCR Package 由 `newyorkthink/docker_images` 仓库的 `.github/workflows/hermes-agent.yml` 构建并发布，与旧 `newyorkthink/hermes-agent` 仓库及其原有 `ghcr.io/newyorkthink/hermes-agent:latest` Package 分离；旧仓库删除后不影响这里的新镜像。
+该 GHCR Package 由当前 `newyorkthink/docker_images` 仓库的 `.github/workflows/hermes-agent.yml` 构建并发布。
 
 GitHub Actions 只发布 `latest`，不上传 Docker Hub，不创建日期标签、提交 SHA 标签、Artifact 或 GitHub Release。
 
@@ -390,7 +390,7 @@ docker run -d \
   -p 3389:3389 \
   -p 5900:5900 \
   -p 6080:6080 \
-  ghcr.io/newyorkthink/docker-images-hermes-agent:latest
+  ghcr.io/newyorkthink/hermes-agent:latest
 ```
 
 需要 RDP 共享目录时额外增加：
