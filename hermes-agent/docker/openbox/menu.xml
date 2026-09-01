@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_menu xmlns="http://openbox.org/"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://openbox.org/
+                file:///usr/share/openbox/menu.xsd">
+
+<menu id="root-menu" label="Openbox 3">
+  <item label="Terminal emulator" icon="/usr/share/icons/AdwaitaLegacy/16x16/legacy/utilities-terminal.png">
+    <action name="Execute"><execute>x-terminal-emulator</execute></action>
+  </item>
+  <item label="Web browser" icon="/usr/share/icons/AdwaitaLegacy/16x16/legacy/web-browser.png">
+    <action name="Execute"><execute>x-www-browser</execute></action>
+  </item>
+  <menu id="/Debian" icon="/usr/share/pixmaps/openbox.png" />
+  <separator />
+  <menu id="applications-menu"
+        label="Applications"
+        icon="/usr/share/icons/AdwaitaLegacy/16x16/legacy/applications-other.png"
+        execute="/usr/local/bin/hermes-openbox-app-menu" />
+  <separator />
+  <item label="ObConf" icon="/usr/share/pixmaps/openbox.png">
+    <action name="Execute"><execute>obconf</execute></action>
+  </item>
+  <item label="Reconfigure" icon="/usr/share/icons/AdwaitaLegacy/16x16/legacy/view-refresh.png">
+    <action name="Reconfigure" />
+  </item>
+  <item label="Restart" icon="/usr/share/icons/AdwaitaLegacy/16x16/legacy/applications-system.png">
+    <action name="Restart" />
+  </item>
+  <separator />
+  <item label="Exit" icon="/usr/share/icons/AdwaitaLegacy/16x16/legacy/application-exit.png">
+    <action name="Exit" />
+  </item>
+</menu>
+
+</openbox_menu>

@@ -1,0 +1,19 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+set -eu
+
+# systemd 不存在时显式执行 Debian xrdp 服务原本的 socket 目录初始化。
+/bin/sh /usr/share/xrdp/socksetup
+
+# RDP 使用上游已有的 hermes 用户；密码只从运行时环境变量读取，不写入镜像或仓库。
+if [ -n "${RDP_PASSWORD:-}" ]; then
+    printf 'hermes:%s\n' "${RDP_PASSWORD}" | chpasswd
+fi
+
+# VNC 密码仅在容器启动时生成到 /run；未设置时 x11vnc/noVNC 不开放桌面会话。
+rm -f /run/x11vnc.pass
+if [ -n "${VNC_PASSWORD:-}" ]; then
+    umask 077
+    x11vnc -storepasswd "${VNC_PASSWORD}" /run/x11vnc.pass >/dev/null
+    chown hermes:hermes /run/x11vnc.pass
+fi

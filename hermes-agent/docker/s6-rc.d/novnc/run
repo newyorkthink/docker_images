@@ -1,0 +1,34 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+set -eu
+
+case "${VNC_ENABLE:-1}" in
+    1|true|TRUE|True|yes|YES|Yes) ;;
+    *) exec sleep infinity ;;
+esac
+
+if [ ! -s /run/x11vnc.pass ]; then
+    echo "[noVNC] VNC_PASSWORD 未设置，noVNC 服务保持禁用。" >&2
+    exec sleep infinity
+fi
+
+vnc_bind="${VNC_BIND:-0.0.0.0}"
+vnc_port="${VNC_PORT:-5900}"
+novnc_bind="${NOVNC_BIND:-0.0.0.0}"
+novnc_port="${NOVNC_PORT:-6080}"
+
+case "${vnc_bind}" in
+    0.0.0.0) vnc_target=127.0.0.1 ;;
+    *) vnc_target="${vnc_bind}" ;;
+esac
+
+# noVNC 没有单独的登录密码，认证仍使用 VNC_PASSWORD。
+# 根路径直接进入 noVNC 客户端，避免 websockify 显示静态目录列表；若上游以后提供 index.html，则保留上游文件。
+if [ ! -e /usr/share/novnc/index.html ] && [ ! -L /usr/share/novnc/index.html ]; then
+    ln -s vnc.html /usr/share/novnc/index.html
+fi
+
+exec s6-setuidgid hermes websockify \
+    --web=/usr/share/novnc \
+    "${novnc_bind}:${novnc_port}" \
+    "${vnc_target}:${vnc_port}"

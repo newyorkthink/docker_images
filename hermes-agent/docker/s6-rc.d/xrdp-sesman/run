@@ -1,0 +1,10 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+set -eu
+
+case "${RDP_ENABLE:-1}" in
+    1|true|TRUE|True|yes|YES|Yes) ;;
+    *) exec sleep infinity ;;
+esac
+
+exec /usr/sbin/xrdp-sesman --nodaemon

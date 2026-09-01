@@ -1,0 +1,15 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+set -eu
+
+case "${RDP_ENABLE:-1}" in
+    1|true|TRUE|True|yes|YES|Yes) ;;
+    *) exec sleep infinity ;;
+esac
+
+rdp_bind="${RDP_BIND:-0.0.0.0}"
+rdp_port="${RDP_PORT:-3389}"
+
+exec s6-setuidgid xrdp /usr/sbin/xrdp \
+    --nodaemon \
+    --port "tcp://${rdp_bind}:${rdp_port}"

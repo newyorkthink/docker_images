@@ -1,0 +1,28 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+set -eu
+
+case "${VNC_ENABLE:-1}" in
+    1|true|TRUE|True|yes|YES|Yes) ;;
+    *) exec sleep infinity ;;
+esac
+
+display="${VNC_DISPLAY:-:99}"
+geometry="${VNC_GEOMETRY:-1920x1080}"
+display_num="${display#:}"
+export DISPLAY="${display}"
+export HOME=/opt/data
+
+# 若该显示号已经有可用的 X Server，则直接复用，避免重复启动 Xvfb。
+if xdpyinfo -display "${DISPLAY}" >/dev/null 2>&1; then
+    echo "[vnc-xvfb] ${DISPLAY} 已有 X Server，复用现有会话。" >&2
+    while xdpyinfo -display "${DISPLAY}" >/dev/null 2>&1; do
+        sleep 5
+    done
+    exit 1
+fi
+
+# 只在确认显示不可用时清理残留锁和 socket，避免重启后被旧文件卡住。
+rm -f "/tmp/.X${display_num}-lock" "/tmp/.X11-unix/X${display_num}"
+
+exec s6-setuidgid hermes Xvfb "${DISPLAY}" -screen 0 "${geometry}x24" -nolisten tcp -ac

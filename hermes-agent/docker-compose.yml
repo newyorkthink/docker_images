@@ -1,0 +1,96 @@
+services:
+  gateway:
+    image: ghcr.io/newyorkthink/hermes-agent:latest
+    container_name: hermes
+    hostname: hermes
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    network_mode: host
+
+    # 扩大共享内存，供 Chrome、LibreOffice 等 GUI 和多进程程序使用
+    shm_size: "${SHM_SIZE:-2gb}"
+
+    # 默认使用宿主机编号为 0 的 NVIDIA GPU，可通过 .env 中的 NVIDIA_GPU_ID 覆盖
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${NVIDIA_GPU_ID:-0}"]
+              capabilities: [gpu]
+
+    # 放宽 Docker 默认 seccomp 限制，供浏览器及部分 GUI 程序使用
+    security_opt:
+      - seccomp:unconfined
+
+    # 允许容器使用 FUSE 挂载所需的 SYS_ADMIN capability，供 xrdp 共享目录使用
+    cap_add:
+      - SYS_ADMIN
+
+    # 将宿主机 /dev/fuse 映射进容器，供 xrdp 通过 FUSE 挂载共享目录
+    devices:
+      - /dev/fuse:/dev/fuse
+
+    volumes:
+      # Hermes 唯一持久化数据目录
+      - ./data:/opt/data:rw
+
+      # 宿主机与 Hermes 共用的工作区，可放脚本、代码、文档等
+      # 如需 Gateway 默认在此目录工作，在 ./data/config.yaml 中设置 terminal.cwd: /workspace
+      - ./workspace:/workspace:rw
+
+    environment:
+      # 容器时区
+      - TZ=${TZ:-Asia/Shanghai}
+
+      # 将容器内 hermes 用户映射为宿主机用户的 UID/GID
+      - HERMES_UID=${HERMES_UID:-1000}
+      - HERMES_GID=${HERMES_GID:-1000}
+
+      # GUI 程序默认使用 VNC 的独立 Xvfb 显示；均可通过 .env 覆盖
+      - DISPLAY=${VNC_DISPLAY:-:99}
+      - VNC_DISPLAY=${VNC_DISPLAY:-:99}
+      - VNC_GEOMETRY=${VNC_GEOMETRY:-1920x1080}
+
+      # LibreOffice 在虚拟显示环境中禁用 OpenGL，并使用 GTK3 渲染
+      - SAL_DISABLE_GL=1
+      - SAL_USE_VCLPLUGIN=gtk3
+
+      # Fcitx5 输入法兼容设置
+      - GTK_IM_MODULE=fcitx
+      - QT_IM_MODULE=fcitx
+      - XMODIFIERS=@im=fcitx
+
+      # Hermes OpenAI-compatible API 服务；默认仅监听宿主机本机，端口可通过 .env 自定义
+      # API_SERVER_KEY 为 Hermes 官方变量，但此处不通过 Compose 传入；认证 Key 统一由持久化的 /opt/data/.env 管理，避免内外两份配置冲突
+      - API_SERVER_ENABLED=${API_SERVER_ENABLED:-true}
+      - API_SERVER_HOST=${API_SERVER_HOST:-127.0.0.1}
+      - API_SERVER_PORT=${API_SERVER_PORT:-8642}
+
+      # 启用 Hermes Web Dashboard；默认仅监听宿主机本机，端口可通过 .env 自定义
+      - HERMES_DASHBOARD=${HERMES_DASHBOARD:-1}
+      - HERMES_DASHBOARD_HOST=${HERMES_DASHBOARD_HOST:-127.0.0.1}
+      - HERMES_DASHBOARD_PORT=${HERMES_DASHBOARD_PORT:-9119}
+      - HERMES_DASHBOARD_SESSION_TOKEN=${HERMES_DASHBOARD_SESSION_TOKEN}
+
+      # NVIDIA 运行环境与上面的 GPU 设备编号保持一致
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_GPU_ID:-0}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+      # 启用 RDP；监听地址和端口均可通过 .env 自定义
+      - RDP_ENABLE=${RDP_ENABLE:-1}
+      - RDP_PASSWORD=${RDP_PASSWORD}
+      - RDP_BIND=${RDP_BIND:-0.0.0.0}
+      - RDP_PORT=${RDP_PORT:-3389}
+
+      # 启用 VNC/noVNC；监听地址和端口均可通过 .env 自定义
+      - VNC_ENABLE=${VNC_ENABLE:-1}
+      - VNC_PASSWORD=${VNC_PASSWORD}
+      - VNC_BIND=${VNC_BIND:-0.0.0.0}
+      - VNC_PORT=${VNC_PORT:-5900}
+      - NOVNC_BIND=${NOVNC_BIND:-0.0.0.0}
+      - NOVNC_PORT=${NOVNC_PORT:-6080}
+
+    # 保留 Hermes 官方 ENTRYPOINT 和 s6-overlay，仅指定官方 gateway 子命令
+    command: ["gateway", "run"]

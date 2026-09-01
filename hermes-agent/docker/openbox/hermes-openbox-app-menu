@@ -1,0 +1,269 @@
+#!/usr/bin/python3
+import configparser
+import os
+import re
+import shlex
+import shutil
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from xml.sax.saxutils import escape, quoteattr
+
+DEFAULT_ICON = "/usr/share/icons/Adwaita/16x16/mimetypes/application-x-executable.png"
+LEGACY_ICON_DIR = "/usr/share/icons/AdwaitaLegacy/16x16/legacy"
+
+CATEGORY_RULES = [
+    ("Office", ("Office",), f"{LEGACY_ICON_DIR}/applications-office.png"),
+    ("Development", ("Development", "IDE"), f"{LEGACY_ICON_DIR}/applications-development.png"),
+    ("Graphics", ("Graphics",), f"{LEGACY_ICON_DIR}/applications-graphics.png"),
+    ("Internet", ("Network", "WebBrowser", "Email"), f"{LEGACY_ICON_DIR}/applications-internet.png"),
+    ("Multimedia", ("AudioVideo", "Audio", "Video"), f"{LEGACY_ICON_DIR}/applications-other.png"),
+    ("Games", ("Game",), f"{LEGACY_ICON_DIR}/applications-games.png"),
+    ("Settings", ("Settings",), f"{LEGACY_ICON_DIR}/applications-system.png"),
+    ("System", ("System",), f"{LEGACY_ICON_DIR}/applications-system.png"),
+    ("Utilities", ("Utility",), f"{LEGACY_ICON_DIR}/applications-utilities.png"),
+]
+CATEGORY_ICONS = {name: icon for name, _, icon in CATEGORY_RULES}
+CATEGORY_ICONS["Other"] = DEFAULT_ICON
+
+FIELD_CODE_RE = re.compile(r"%(?:f|F|u|U|d|D|n|N|i|c|k|v|m)")
+
+_icon_index = None
+
+
+def icon_index():
+    global _icon_index
+    if _icon_index is not None:
+        return _icon_index
+    result = {}
+    for root in (Path("/usr/local/share/icons"), Path("/usr/share/icons"), Path("/usr/share/pixmaps")):
+        if not root.is_dir():
+            continue
+        try:
+            for path in root.rglob("*"):
+                if not path.is_file() or path.suffix.lower() not in {".png", ".svg", ".xpm"}:
+                    continue
+                result.setdefault(path.stem, []).append(str(path))
+        except OSError:
+            continue
+    _icon_index = result
+    return result
+
+
+def icon_score(path):
+    score = 1000
+    if "/hicolor/" in path:
+        score -= 400
+    elif "/Adwaita/" in path:
+        score -= 300
+    elif "/AdwaitaLegacy/" in path:
+        score -= 280
+    elif "/breeze/" in path.lower():
+        score -= 250
+    if "/48x48/" in path:
+        score -= 80
+    elif "/32x32/" in path:
+        score -= 70
+    elif "/24x24/" in path or "/22x22/" in path:
+        score -= 60
+    elif "/16x16/" in path:
+        score -= 50
+    elif "/scalable/" in path:
+        score -= 40
+    if "/apps/" in path:
+        score -= 30
+    if path.endswith(".png"):
+        score -= 5
+    return score
+
+
+def resolve_icon(value):
+    value = (value or "").strip()
+    if not value:
+        return DEFAULT_ICON
+
+    explicit = Path(value)
+    if explicit.is_absolute() and explicit.is_file():
+        return str(explicit)
+
+    stem = explicit.stem if explicit.suffix.lower() in {".png", ".svg", ".xpm"} else value
+    for ext in (".png", ".svg", ".xpm"):
+        candidate = Path("/usr/share/pixmaps") / f"{stem}{ext}"
+        if candidate.is_file():
+            return str(candidate)
+
+    matches = icon_index().get(stem, ())
+    if matches:
+        return min(matches, key=icon_score)
+    return DEFAULT_ICON
+
+
+def desktop_dirs():
+    seen = set()
+    paths = [
+        Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "applications",
+        Path("/usr/local/share/applications"),
+        Path("/usr/share/applications"),
+        Path("/opt/share/applications"),
+    ]
+    for path in paths:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            yield path
+
+
+def localized_name(section):
+    lang = os.environ.get("LANG", "").split(".", 1)[0]
+    candidates = []
+    if lang:
+        candidates.append(f"Name[{lang}]")
+        if "_" in lang:
+            candidates.append(f"Name[{lang.split('_', 1)[0]}]")
+    candidates.append("Name")
+    for key in candidates:
+        value = section.get(key, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def truthy(value):
+    return value.strip().lower() in {"1", "true", "yes"}
+
+
+def desktop_visible(section):
+    if section.get("Type", "Application").strip() != "Application":
+        return False
+    if truthy(section.get("Hidden", "false")) or truthy(section.get("NoDisplay", "false")):
+        return False
+
+    only = {x.upper() for x in section.get("OnlyShowIn", "").split(";") if x}
+    if only and "OPENBOX" not in only:
+        return False
+
+    blocked = {x.upper() for x in section.get("NotShowIn", "").split(";") if x}
+    if "OPENBOX" in blocked:
+        return False
+
+    try_exec = section.get("TryExec", "").strip()
+    if try_exec and not (Path(try_exec).is_file() if "/" in try_exec else shutil.which(try_exec)):
+        return False
+    return True
+
+
+def clean_exec(value):
+    value = value.replace("%%", "\0")
+    value = FIELD_CODE_RE.sub("", value)
+    value = value.replace("\0", "%")
+    return " ".join(value.split())
+
+
+def category_for(section):
+    categories = {x for x in section.get("Categories", "").split(";") if x}
+    for name, markers, _ in CATEGORY_RULES:
+        if categories.intersection(markers):
+            return name
+    return "Other"
+
+
+def application_entries():
+    entries = []
+    seen_ids = set()
+    for directory in desktop_dirs():
+        if not directory.is_dir():
+            continue
+        for desktop in sorted(directory.glob("*.desktop")):
+            desktop_id = desktop.name
+            if desktop_id in seen_ids:
+                continue
+            seen_ids.add(desktop_id)
+
+            parser = configparser.ConfigParser(interpolation=None, strict=False)
+            parser.optionxform = str
+            try:
+                with desktop.open("r", encoding="utf-8", errors="replace") as fh:
+                    parser.read_file(fh)
+            except (OSError, configparser.Error):
+                continue
+            if not parser.has_section("Desktop Entry"):
+                continue
+            section = parser["Desktop Entry"]
+            if not desktop_visible(section):
+                continue
+
+            name = localized_name(section)
+            command = clean_exec(section.get("Exec", ""))
+            if not name or not command:
+                continue
+            if truthy(section.get("Terminal", "false")):
+                command = "x-terminal-emulator -e sh -lc " + shlex.quote("exec " + command)
+
+            entries.append((
+                category_for(section),
+                name,
+                command,
+                resolve_icon(section.get("Icon", "")),
+            ))
+    return entries
+
+
+def patch_debian_menu(path="/var/lib/openbox/debian-menu.xml"):
+    menu_path = Path(path)
+    if not menu_path.is_file():
+        return 0
+
+    tree = ET.parse(menu_path)
+    root = tree.getroot()
+    changed = False
+    for node in root.iter():
+        local = node.tag.rsplit("}", 1)[-1]
+        if local in {"menu", "item"} and not node.get("icon"):
+            node.set("icon", DEFAULT_ICON)
+            changed = True
+    if changed:
+        ET.register_namespace("", "http://openbox.org/")
+        ET.register_namespace("xsi", "http://www.w3.org/2001/XMLSchema-instance")
+        tree.write(menu_path, encoding="UTF-8", xml_declaration=True)
+    return 0
+
+
+def xml_output():
+    grouped = {name: [] for name, _, _ in CATEGORY_RULES}
+    grouped["Other"] = []
+    for category, name, command, icon in application_entries():
+        grouped.setdefault(category, []).append((name, command, icon))
+
+    out = ["<openbox_pipe_menu>"]
+    for category, _, _ in CATEGORY_RULES:
+        items = grouped.get(category, [])
+        if not items:
+            continue
+        out.append(
+            f"  <menu id={quoteattr('hermes-' + category.lower())} "
+            f"label={quoteattr(category)} icon={quoteattr(CATEGORY_ICONS[category])}>"
+        )
+        for name, command, icon in sorted(items, key=lambda item: item[0].casefold()):
+            out.append(f"    <item label={quoteattr(name)} icon={quoteattr(icon)}>")
+            out.append(f'      <action name="Execute"><execute>{escape(command)}</execute></action>')
+            out.append("    </item>")
+        out.append("  </menu>")
+
+    other = grouped.get("Other", [])
+    if other:
+        out.append(f'  <menu id="hermes-other" label="Other" icon={quoteattr(DEFAULT_ICON)}>')
+        for name, command, icon in sorted(other, key=lambda item: item[0].casefold()):
+            out.append(f"    <item label={quoteattr(name)} icon={quoteattr(icon)}>")
+            out.append(f'      <action name="Execute"><execute>{escape(command)}</execute></action>')
+            out.append("    </item>")
+        out.append("  </menu>")
+    out.append("</openbox_pipe_menu>")
+    return "\n".join(out)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--patch-debian-menu"]:
+        raise SystemExit(patch_debian_menu())
+    if sys.argv[1:]:
+        raise SystemExit("usage: hermes-openbox-app-menu [--patch-debian-menu]")
+    print(xml_output())
