@@ -179,6 +179,46 @@ jobs:
           else:
               print("上游 Responses 工具提示词注入结构已变化，跳过顺序补丁。")
 
+          single_turn_anchor = (
+              '        if system_msgs:\n'
+              '            sys_text = _extract_content_text(system_msgs[0].content)\n'
+              '            if Config.PROVIDER == "claude":\n'
+              '                # Claude rejects "[System instruction: ...]" as prompt injection.\n'
+              '                # Present it as context instead.\n'
+              '                prefix = f"{sys_text}\\n\\n"\n'
+              '            else:\n'
+              '                prefix = f"[System instruction: {sys_text}]\\n\\n"\n'
+          )
+          single_turn_replacement = (
+              '        if system_msgs:\n'
+              '            sys_texts = [\n'
+              '                _extract_content_text(msg.content)\n'
+              '                for msg in system_msgs\n'
+              '            ]\n'
+              '            sys_texts = [value for value in sys_texts if value]\n'
+              '            if Config.PROVIDER == "claude":\n'
+              '                prefix = "\\n\\n".join(sys_texts)\n'
+              '            else:\n'
+              '                prefix = "\\n\\n".join(\n'
+              '                    f"[System instruction: {value}]"\n'
+              '                    for value in sys_texts\n'
+              '                )\n'
+              '            if prefix:\n'
+              '                prefix += "\\n\\n"\n'
+          )
+
+          if "sys_texts = [" in text:
+              print("上游单轮请求已保留全部系统指令，无需重复补丁。")
+          elif text.count(single_turn_anchor) == 1:
+              text = text.replace(
+                  single_turn_anchor,
+                  single_turn_replacement,
+                  1,
+              )
+              print("已修复单轮请求只保留第一条系统指令、导致工具提示词被丢弃的问题。")
+          else:
+              raise SystemExit("无法唯一定位单轮系统指令拼接逻辑，停止构建。")
+
           persistent_anchor = "    pruned_prompt = _build_prompt(latest_msgs)\n"
           persistent_replacement = (
               '    if has_tool_prompt:\n'
@@ -227,6 +267,9 @@ jobs:
 
           if responses_anchor in patched:
               raise SystemExit("Responses 仍把工具提示词放在全部系统指令之前，停止构建。")
+
+          if "sys_text = _extract_content_text(system_msgs[0].content)" in patched:
+              raise SystemExit("单轮请求仍只保留第一条系统指令，停止构建。")
 
           if "def _extract_persistent_prompt(" in patched and "tool_system_msgs = [" not in patched:
               raise SystemExit("持久会话后续轮次仍会丢失工具提示词，停止构建。")
