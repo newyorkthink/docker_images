@@ -179,14 +179,8 @@ jobs:
           else:
               print("上游 Responses 工具提示词注入结构已变化，跳过顺序补丁。")
 
-          persistent_anchor = (
-              '    if not latest_msgs:\n'
-              '        latest_msgs = [messages[-1]]\n'
-              '    pruned_prompt = _build_prompt(latest_msgs)\n'
-          )
+          persistent_anchor = "    pruned_prompt = _build_prompt(latest_msgs)\n"
           persistent_replacement = (
-              '    if not latest_msgs:\n'
-              '        latest_msgs = [messages[-1]]\n'
               '    if has_tool_prompt:\n'
               '        tool_system_msgs = [\n'
               '            msg for msg in messages\n'
@@ -204,7 +198,7 @@ jobs:
 
           if "tool_system_msgs = [" in text:
               print("上游持久会话已保留工具提示词，无需重复补丁。")
-          elif persistent_anchor in text:
+          elif text.count(persistent_anchor) == 1:
               text = text.replace(
                   persistent_anchor,
                   persistent_replacement,
@@ -212,7 +206,7 @@ jobs:
               )
               print("已修复持久会话后续轮次丢失工具提示词的问题。")
           else:
-              raise SystemExit("无法定位持久会话提示词裁剪逻辑，停止构建。")
+              raise SystemExit("无法唯一定位持久会话提示词裁剪逻辑，停止构建。")
 
           route_file.write_text(text, encoding="utf-8")
 
