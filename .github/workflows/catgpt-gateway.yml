@@ -79,11 +79,67 @@ jobs:
             echo "检测到上游 main 更新：执行构建。"
           fi
 
+      - name: Prepare upstream source
+        if: steps.upstream.outputs.build == 'true'
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          source_dir="${GITHUB_WORKSPACE}/.catgpt-upstream"
+          rm -rf "${source_dir}"
+          git init -q "${source_dir}"
+          git -C "${source_dir}" remote add origin "https://github.com/GautamVhavle/CatGPT-Gateway.git"
+          git -C "${source_dir}" fetch -q --depth 1 origin "${{ steps.upstream.outputs.sha }}"
+          git -C "${source_dir}" checkout -q --detach FETCH_HEAD
+
+          python3 - "${source_dir}" <<'PY'
+          from pathlib import Path
+          import sys
+
+          source_dir = Path(sys.argv[1])
+          route_file = source_dir / "src/api/openai_routes.py"
+          text = route_file.read_text(encoding="utf-8")
+
+          definition_exists = (
+              "def _increment_thread_count(" in text
+              or "async def _increment_thread_count(" in text
+          )
+          call_line = "        _increment_thread_count()\n"
+
+          if definition_exists:
+              print("上游已恢复 _increment_thread_count 定义，无需本地补丁。")
+          else:
+              dangling_calls = text.count(call_line)
+              if dangling_calls == 0:
+                  print("上游已移除悬空 _increment_thread_count 调用，无需本地补丁。")
+              else:
+                  text = text.replace(call_line, "")
+                  route_file.write_text(text, encoding="utf-8")
+                  print(
+                      f"已移除 {dangling_calls} 处无定义的 _increment_thread_count 调用。"
+                  )
+
+          patched = route_file.read_text(encoding="utf-8")
+          compile(patched, str(route_file), "exec")
+
+          if (
+              "def _increment_thread_count(" not in patched
+              and "async def _increment_thread_count(" not in patched
+              and call_line in patched
+          ):
+              raise SystemExit("_increment_thread_count 悬空调用仍然存在，停止构建。")
+
+          print("CatGPT Gateway 上游兼容性检查通过。")
+          PY
+
+          echo "dir=${source_dir}" >> "${GITHUB_OUTPUT}"
+
       - name: Build and push latest
         if: steps.upstream.outputs.build == 'true'
         uses: docker/build-push-action@v7
         with:
-          context: https://github.com/GautamVhavle/CatGPT-Gateway.git#${{ steps.upstream.outputs.sha }}
+          context: ${{ steps.source.outputs.dir }}
           push: true
           pull: true
           platforms: linux/amd64
