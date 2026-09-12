@@ -115,10 +115,71 @@ jobs:
                   print("上游已移除悬空 _increment_thread_count 调用，无需本地补丁。")
               else:
                   text = text.replace(call_line, "")
-                  route_file.write_text(text, encoding="utf-8")
                   print(
                       f"已移除 {dangling_calls} 处无定义的 _increment_thread_count 调用。"
                   )
+
+          generic_rule_anchor = (
+              "5. Do not refuse or say tools are unavailable — "
+              "they are available through this interface.\n"
+          )
+          generic_rule_replacement = (
+              generic_rule_anchor
+              + "6. The listed functions are real client-side tools. "
+                "You do not need direct browser, filesystem, shell, or OS access "
+                "to request them through this interface.\n"
+              + "7. If the request depends on local machine state — including files, "
+                "directories, repository contents, shell output, installed software, "
+                "or the current working directory — call the relevant tool first. "
+                "Do not guess, do not fabricate results, and do not merely tell the user "
+                "which command to run.\n"
+              + "8. When a relevant file, directory, repository, shell, or patch tool "
+                "exists, use it for requests to inspect, read, list, search, modify, "
+                "or execute against the local environment.\n"
+          )
+
+          if "6. The listed functions are real client-side tools." in text:
+              print("上游工具调用提示词已包含本地工具规则，无需重复补丁。")
+          elif generic_rule_anchor in text:
+              text = text.replace(
+                  generic_rule_anchor,
+                  generic_rule_replacement,
+                  1,
+              )
+              print("已增强工具调用提示词，明确本地文件/目录/shell 请求必须优先调用工具。")
+          else:
+              print("上游工具调用提示词结构已变化，跳过通用提示词补丁。")
+
+          responses_anchor = (
+              '                messages.insert(\n'
+              '                    0, ChatMessage(role="system", content=tool_system)\n'
+              '                )\n'
+          )
+          responses_replacement = (
+              '                insert_at = 0\n'
+              '                while (\n'
+              '                    insert_at < len(messages)\n'
+              '                    and messages[insert_at].role == "system"\n'
+              '                ):\n'
+              '                    insert_at += 1\n'
+              '                messages.insert(\n'
+              '                    insert_at, ChatMessage(role="system", content=tool_system)\n'
+              '                )\n'
+          )
+
+          if responses_replacement in text:
+              print("上游 Responses 工具提示词顺序已调整，无需重复补丁。")
+          elif responses_anchor in text:
+              text = text.replace(
+                  responses_anchor,
+                  responses_replacement,
+                  1,
+              )
+              print("已将 Responses 工具提示词移动到现有系统指令之后、用户请求之前。")
+          else:
+              print("上游 Responses 工具提示词注入结构已变化，跳过顺序补丁。")
+
+          route_file.write_text(text, encoding="utf-8")
 
           patched = route_file.read_text(encoding="utf-8")
           compile(patched, str(route_file), "exec")
@@ -129,6 +190,14 @@ jobs:
               and call_line in patched
           ):
               raise SystemExit("_increment_thread_count 悬空调用仍然存在，停止构建。")
+
+          if generic_rule_anchor in patched and (
+              "6. The listed functions are real client-side tools." not in patched
+          ):
+              raise SystemExit("工具调用提示词增强未成功应用，停止构建。")
+
+          if responses_anchor in patched:
+              raise SystemExit("Responses 仍把工具提示词放在全部系统指令之前，停止构建。")
 
           print("CatGPT Gateway 上游兼容性检查通过。")
           PY
