@@ -1,6 +1,6 @@
 # CatGPT Gateway
 
-基于上游 CatGPT Gateway 指定 commit 构建并发布到 GHCR。当前在构建阶段自动应用两类最小兼容补丁：修复上游遗留的 `_increment_thread_count()` 悬空调用，以及增强 Codex CLI `/v1/responses` 的本地工具调用提示与注入顺序；上游恢复对应实现后会自动跳过已不需要的补丁。
+基于上游 CatGPT Gateway 指定 commit 构建并发布到 GHCR。当前在构建阶段自动应用三类最小兼容补丁：修复上游遗留的 `_increment_thread_count()` 悬空调用、增强 Codex CLI `/v1/responses` 的本地工具调用提示与注入顺序，以及修复持久会话后续轮次丢失工具提示词的问题；上游恢复对应实现后会自动跳过已不需要的补丁。
 
 上游项目：[GautamVhavle/CatGPT-Gateway](https://github.com/GautamVhavle/CatGPT-Gateway)
 
@@ -61,7 +61,8 @@ http://服务器IP:8000/v1
 
 - 明确告诉网页模型：这些函数是由 API 客户端在用户机器上执行的真实工具；
 - 对依赖本地状态的请求要求优先调用对应工具，禁止猜测结果或只让用户手动执行命令；
-- 在 `/v1/responses` 中把工具调用指令放到 Codex 自身系统指令之后、用户请求之前，避免工具规则被较长的 Codex 指令淹没。
+- 在 `/v1/responses` 中把工具调用指令放到 Codex 自身系统指令之后、用户请求之前，避免工具规则被较长的 Codex 指令淹没；
+- 在持久会话的后续轮次继续保留工具调用提示词，避免首次普通聊天后下一轮“读目录/读文件”只剩用户文本，从而被网页模型误判成普通 Chat。
 
 补丁完成后会执行 Python 语法检查和静态条件检查。由于上游工具调用仍依赖网页模型遵循提示词，实际 Codex 文件/终端工具能力仍需要运行时验证，不能等同于原生 function calling。
 

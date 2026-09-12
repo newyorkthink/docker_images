@@ -179,6 +179,41 @@ jobs:
           else:
               print("上游 Responses 工具提示词注入结构已变化，跳过顺序补丁。")
 
+          persistent_anchor = (
+              '    if not latest_msgs:\n'
+              '        latest_msgs = [messages[-1]]\n'
+              '    pruned_prompt = _build_prompt(latest_msgs)\n'
+          )
+          persistent_replacement = (
+              '    if not latest_msgs:\n'
+              '        latest_msgs = [messages[-1]]\n'
+              '    if has_tool_prompt:\n'
+              '        tool_system_msgs = [\n'
+              '            msg for msg in messages\n'
+              '            if msg.role == "system"\n'
+              '            and isinstance(msg.content, str)\n'
+              '            and (\n'
+              '                "You are in tool-calling mode." in msg.content\n'
+              '                or "You have access to external tools through a structured interface." in msg.content\n'
+              '            )\n'
+              '        ]\n'
+              '        if tool_system_msgs:\n'
+              '            latest_msgs = tool_system_msgs[-1:] + latest_msgs\n'
+              '    pruned_prompt = _build_prompt(latest_msgs)\n'
+          )
+
+          if "tool_system_msgs = [" in text:
+              print("上游持久会话已保留工具提示词，无需重复补丁。")
+          elif persistent_anchor in text:
+              text = text.replace(
+                  persistent_anchor,
+                  persistent_replacement,
+                  1,
+              )
+              print("已修复持久会话后续轮次丢失工具提示词的问题。")
+          else:
+              raise SystemExit("无法定位持久会话提示词裁剪逻辑，停止构建。")
+
           route_file.write_text(text, encoding="utf-8")
 
           patched = route_file.read_text(encoding="utf-8")
@@ -198,6 +233,9 @@ jobs:
 
           if responses_anchor in patched:
               raise SystemExit("Responses 仍把工具提示词放在全部系统指令之前，停止构建。")
+
+          if "def _extract_persistent_prompt(" in patched and "tool_system_msgs = [" not in patched:
+              raise SystemExit("持久会话后续轮次仍会丢失工具提示词，停止构建。")
 
           print("CatGPT Gateway 上游兼容性检查通过。")
           PY
