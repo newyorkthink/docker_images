@@ -136,6 +136,9 @@ jobs:
               + "8. When a relevant file, directory, repository, shell, or patch tool "
                 "exists, use it for requests to inspect, read, list, search, modify, "
                 "or execute against the local environment.\n"
+              + "9. Paths and local-state requests refer to the API client's machine, "
+                "not this browser/container environment. Never inspect your own runtime "
+                "as a substitute for a listed client-side tool.\n"
           )
 
           if "6. The listed functions are real client-side tools." in text:
@@ -179,6 +182,70 @@ jobs:
           else:
               print("上游 Responses 工具提示词注入结构已变化，跳过顺序补丁。")
 
+          local_choice_anchor = (
+              '            chat_tools = _responses_tools_to_chat_tools(raw_tools)\n'
+              '            if chat_tools and request.tool_choice != "none":\n'
+              '                tool_system = _build_tool_system_prompt(\n'
+              '                    chat_tools, tool_choice=request.tool_choice\n'
+              '                )\n'
+          )
+          local_choice_replacement = (
+              '            chat_tools = _responses_tools_to_chat_tools(raw_tools)\n'
+              '            if chat_tools and request.tool_choice != "none":\n'
+              '                effective_tool_choice = request.tool_choice\n'
+              '                if effective_tool_choice in (None, "auto"):\n'
+              '                    available_tool_names = {\n'
+              '                        tool.function.name for tool in chat_tools\n'
+              '                    }\n'
+              '                    latest_user_text = ""\n'
+              '                    for candidate in reversed(messages):\n'
+              '                        if candidate.role == "user":\n'
+              '                            latest_user_text = _extract_content_text(\n'
+              '                                candidate.content\n'
+              '                            )\n'
+              '                            break\n'
+              '                    local_request = latest_user_text.lower()\n'
+              '                    local_markers = (\n'
+              '                        "/home/", "~/", "current directory",\n'
+              '                        "current folder", "working directory",\n'
+              '                        "my files", "my folder", "my directory",\n'
+              '                        "本机", "当前目录", "当前文件夹",\n'
+              '                        "我的文件", "我的文件夹", "文件夹有什么",\n'
+              '                        "目录有什么", "看下我文件", "看看我文件",\n'
+              '                        "查看我文件", "列出文件", "列目录",\n'
+              '                        "读取文件",\n'
+              '                    )\n'
+              '                    if (\n'
+              '                        "exec_command" in available_tool_names\n'
+              '                        and any(\n'
+              '                            marker in local_request\n'
+              '                            for marker in local_markers\n'
+              '                        )\n'
+              '                    ):\n'
+              '                        effective_tool_choice = {\n'
+              '                            "type": "function",\n'
+              '                            "function": {"name": "exec_command"},\n'
+              '                        }\n'
+              '                        log.info(\n'
+              '                            "Forcing exec_command for local-state request"\n'
+              '                        )\n'
+              '                tool_system = _build_tool_system_prompt(\n'
+              '                    chat_tools, tool_choice=effective_tool_choice\n'
+              '                )\n'
+          )
+
+          if "Forcing exec_command for local-state request" in text:
+              print("上游已包含本地状态请求强制 exec_command 逻辑，无需重复补丁。")
+          elif text.count(local_choice_anchor) == 1:
+              text = text.replace(
+                  local_choice_anchor,
+                  local_choice_replacement,
+                  1,
+              )
+              print("已为明确的本地文件/目录请求强制选择 exec_command。")
+          else:
+              raise SystemExit("无法唯一定位 Responses 工具选择逻辑，停止构建。")
+
           single_turn_anchor = (
               '        if system_msgs:\n'
               '            sys_text = _extract_content_text(system_msgs[0].content)\n'
@@ -199,23 +266,33 @@ jobs:
               '            if Config.PROVIDER == "claude":\n'
               '                prefix = "\\n\\n".join(sys_texts)\n'
               '            else:\n'
-              '                prefix = "\\n\\n".join(\n'
+              '                tool_texts = [\n'
+              '                    value for value in sys_texts\n'
+              '                    if value.startswith("You are in tool-calling mode.")\n'
+              '                ]\n'
+              '                context_texts = [\n'
+              '                    value for value in sys_texts\n'
+              '                    if value not in tool_texts\n'
+              '                ]\n'
+              '                prefix_parts = [\n'
               '                    f"[System instruction: {value}]"\n'
-              '                    for value in sys_texts\n'
-              '                )\n'
+              '                    for value in context_texts\n'
+              '                ]\n'
+              '                prefix_parts.extend(tool_texts)\n'
+              '                prefix = "\\n\\n".join(prefix_parts)\n'
               '            if prefix:\n'
               '                prefix += "\\n\\n"\n'
           )
 
-          if "sys_texts = [" in text:
-              print("上游单轮请求已保留全部系统指令，无需重复补丁。")
+          if "tool_texts = [" in text:
+              print("上游单轮请求已将工具指令作为直接指令保留，无需重复补丁。")
           elif text.count(single_turn_anchor) == 1:
               text = text.replace(
                   single_turn_anchor,
                   single_turn_replacement,
                   1,
               )
-              print("已修复单轮请求只保留第一条系统指令、导致工具提示词被丢弃的问题。")
+              print("已修复单轮请求工具提示词被伪 system 包装后容易被忽略的问题。")
           else:
               raise SystemExit("无法唯一定位单轮系统指令拼接逻辑，停止构建。")
 
@@ -261,15 +338,21 @@ jobs:
               raise SystemExit("_increment_thread_count 悬空调用仍然存在，停止构建。")
 
           if generic_rule_anchor in patched and (
-              "6. The listed functions are real client-side tools." not in patched
+              "9. Paths and local-state requests refer to the API client's machine" not in patched
           ):
               raise SystemExit("工具调用提示词增强未成功应用，停止构建。")
 
           if responses_anchor in patched:
               raise SystemExit("Responses 仍把工具提示词放在全部系统指令之前，停止构建。")
 
+          if "Forcing exec_command for local-state request" not in patched:
+              raise SystemExit("本地状态请求仍未强制选择 exec_command，停止构建。")
+
           if "sys_text = _extract_content_text(system_msgs[0].content)" in patched:
               raise SystemExit("单轮请求仍只保留第一条系统指令，停止构建。")
+
+          if "tool_texts = [" not in patched:
+              raise SystemExit("单轮请求仍可能把工具指令伪装成 system 文本，停止构建。")
 
           if "def _extract_persistent_prompt(" in patched and "tool_system_msgs = [" not in patched:
               raise SystemExit("持久会话后续轮次仍会丢失工具提示词，停止构建。")
