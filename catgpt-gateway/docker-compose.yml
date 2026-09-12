@@ -1,0 +1,74 @@
+services:
+  catgpt:
+    image: ghcr.io/newyorkthink/catgpt-gateway:latest
+    container_name: catgpt
+    restart: unless-stopped
+
+    ports:
+      # OpenAI 兼容 API
+      - "8000:8000"
+      # noVNC 网页界面，用于登录和查看 Chromium
+      - "6080:6080"
+
+    volumes:
+      # 持久化浏览器登录状态
+      - catgpt_browser_data:/app/browser_data
+      # 持久化日志
+      - ./docker-logs:/app/logs
+
+    environment:
+      # 使用有界面的 Chromium
+      HEADLESS: "false"
+      SLOW_MO: "50"
+
+      # 虚拟显示
+      DISPLAY: ":99"
+      DISPLAY_WIDTH: "1366"
+      DISPLAY_HEIGHT: "768"
+      DISPLAY_DEPTH: "24"
+
+      # 使用 ChatGPT 网页
+      PROVIDER: "chatgpt"
+      CHATGPT_URL: "https://chatgpt.com"
+
+      # 请求与页面选择器超时
+      RESPONSE_TIMEOUT: "120000"
+      SELECTOR_TIMEOUT: "10000"
+
+      # 网关请求间隔
+      RATE_LIMIT_SECONDS: "5"
+
+      # 模拟正常输入节奏
+      TYPING_SPEED_MIN: "50"
+      TYPING_SPEED_MAX: "150"
+      THINKING_PAUSE_MIN: "1000"
+      THINKING_PAUSE_MAX: "3000"
+
+      # OpenAI 兼容 API
+      API_HOST: "0.0.0.0"
+      API_PORT: "8000"
+      API_TOKEN: "${API_TOKEN:?请在同目录 .env 中设置 API_TOKEN}"
+
+      # noVNC 登录密码
+      VNC_PASSWORD: "${VNC_PASSWORD:?请在同目录 .env 中设置 VNC_PASSWORD}"
+
+      # 日志
+      LOG_LEVEL: "INFO"
+      VERBOSE: "false"
+
+    # 上游 Chromium 容器当前需要放宽 seccomp。
+    security_opt:
+      - seccomp=unconfined
+
+    shm_size: "2gb"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+volumes:
+  catgpt_browser_data:
+    driver: local
