@@ -1,6 +1,6 @@
 # CatGPT Gateway
 
-基于上游 CatGPT Gateway 指定 commit 构建并发布到 GHCR。当前在构建阶段自动应用三类最小兼容补丁：修复上游遗留的 `_increment_thread_count()` 悬空调用、增强 Codex CLI `/v1/responses` 的本地工具调用提示与注入顺序，以及修复持久会话后续轮次丢失工具提示词的问题；上游恢复对应实现后会自动跳过已不需要的补丁。
+基于上游 CatGPT Gateway 指定 commit 构建并发布到 GHCR。当前在构建阶段自动应用兼容补丁：修复上游遗留的 `_increment_thread_count()` 悬空调用、增强 Codex CLI `/v1/responses` 的本地工具调用提示与注入顺序，以及修复持久会话后续轮次丢失工具提示词的问题。原有提示词补丁保留；新增协议补丁遇到上游结构变化时会停止构建，避免发布未经检查的镜像。
 
 上游项目：[GautamVhavle/CatGPT-Gateway](https://github.com/GautamVhavle/CatGPT-Gateway)
 
@@ -64,7 +64,19 @@ http://服务器IP:8000/v1
 - 在 `/v1/responses` 中把工具调用指令放到 Codex 自身系统指令之后、用户请求之前，避免工具规则被较长的 Codex 指令淹没；
 - 在持久会话的后续轮次继续保留工具调用提示词，避免首次普通聊天后下一轮“读目录/读文件”只剩用户文本，从而被网页模型误判成普通 Chat。
 
-补丁完成后会执行 Python 语法检查和静态条件检查。由于上游工具调用仍依赖网页模型遵循提示词，实际 Codex 文件/终端工具能力仍需要运行时验证，不能等同于原生 function calling。
+独立协议补丁 `codex-tools.patch` 还会：
+
+- 保留 `custom` 工具的输入格式与 `namespace` 中的工具定义，避免请求解析或转换时丢失；
+- 将自定义工具调用还原为 `custom_tool_call`，保留原始输入、工具名、命名空间及结果关联 ID；
+- 统一 SSE 各事件与最终响应中的 item ID，增量开始时使用空参数，避免参数重复；
+- 保留工具调用和结果历史，允许连续调用；收到本轮工具结果后不再强制重复执行初始命令；
+- 支持 `exec_command`、`shell_command`、`shell`，并尊重 `tool_choice="none"`；
+- 明确要求调用工具却没有获得有效调用时返回错误，不把普通文字当作本地操作成功；
+- 记录工具名称及不支持的工具类型，不新增文件内容、命令参数或鉴权信息日志。
+
+`check-codex-tools.py` 在临时环境离线检查实际补丁后的请求模型、历史转换和 SSE 事件，不启动浏览器、不执行模型生成的命令。尚不支持的服务端工具类型会记入日志；请求没有任何支持的客户端工具时会明确报错。自定义工具的 grammar 作为提示保留，不提供原生受约束生成保证。
+
+补丁完成后会执行 Python 语法检查、静态条件检查和上述离线协议检查。由于上游工具调用仍依赖网页模型遵循提示词，实际 Codex 文件/终端工具能力仍需要运行时验证，不能等同于原生 function calling。
 
 ## 自动构建
 
@@ -75,3 +87,4 @@ http://服务器IP:8000/v1
 - 上游有新提交时，按该具体 commit SHA 拉取源码、执行兼容性检查后构建并更新 `latest`。
 - 手动触发或修改 CatGPT Gateway 自身目录/工作流时会强制重新构建。
 - 删除该镜像时，只需要删除 `catgpt-gateway/` 和 `.github/workflows/catgpt-gateway.yml`，不会影响其他镜像。
+

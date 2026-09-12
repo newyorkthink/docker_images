@@ -1,0 +1,328 @@
+--- a/src/api/openai_routes.py
++++ b/src/api/openai_routes.py
+@@ -383,7 +383,7 @@
+     # Subsequent turns: Extract latest user turn (and any tool results directly associated with it)
+     latest_msgs: list[ChatMessage] = []
+     for msg in reversed(messages):
+-        if msg.role in ("user", "tool"):
++        if msg.role in ("user", "tool") or (msg.role == "assistant" and msg.tool_calls):
+             latest_msgs.insert(0, msg)
+             if msg.role == "user":
+                 break
+@@ -461,7 +461,7 @@
+     if isinstance(content, list):
+         parts = []
+         for item in content:
+-            if isinstance(item, dict) and item.get("type") == "text":
++            if isinstance(item, dict) and item.get("type") in ("text", "input_text", "output_text"):
+                 parts.append(item.get("text", ""))
+         return "\n".join(parts) if parts else ""
+     return str(content)
+@@ -689,7 +689,7 @@
+             else:
+                 parts.append(
+                     f"[Tool result for {msg.tool_call_id or 'unknown'}]: {tool_content}\n\n"
+-                    f"Use the tool result to answer the user. Do NOT call tools again."
++                    f"Use the tool result to answer the user. Call another tool if more evidence or actions are needed; otherwise answer using the results."
+                 )
+         elif msg.role == "assistant" and msg.tool_calls:
+             # Assistant requested tool calls — show what was called
+@@ -739,8 +739,10 @@
+         forced_tool_name = (
+             tool_choice.get("function", {}).get("name")
+             if isinstance(tool_choice.get("function"), dict)
+-            else None
++            else tool_choice.get("name")
+         )
++        if forced_tool_name and tool_choice.get("namespace"):
++            forced_tool_name = f"{tool_choice['namespace']}.{forced_tool_name}"
+ 
+     if forced_tool_name:
+         decision = (
+@@ -774,7 +776,7 @@
+ 1. Output ONLY the JSON code block when calling tools. Do not add any commentary, explanation, or text outside the code block.
+ 2. You may call multiple functions in one response by adding them to the array.
+ 3. Use the exact parameter names and types shown in each function's schema.
+-4. When you receive tool results in a follow-up message, use them to give the user a natural, helpful answer. Do NOT output another JSON tool call for the same request.
++4. When you receive tool results in a follow-up message, use them to give the user a natural, helpful answer. Call another tool if more evidence or actions are needed; otherwise answer using the results.
+ 
+ Available functions:
+ {tools_json}
+@@ -802,7 +804,7 @@
+ 1. Output ONLY the JSON code block when calling tools. No explanation, no text before or after.
+ 2. You may call multiple functions in one response by adding them to the array.
+ 3. Use the exact parameter names and types from each function's schema.
+-4. When a follow-up message contains tool results, summarize them naturally for the user. Do NOT call tools again for the same request.
++4. When a follow-up message contains tool results, summarize them naturally for the user. Call another tool if more evidence or actions are needed; otherwise answer using the results.
+ 5. Do not refuse or say tools are unavailable — they are available through this interface.
+ 6. The listed functions are real client-side tools. You do not need direct browser, filesystem, shell, or OS access to request them through this interface.
+ 7. If the request depends on local machine state — including files, directories, repository contents, shell output, installed software, or the current working directory — call the relevant tool first. Do not guess, do not fabricate results, and do not merely tell the user which command to run.
+@@ -1457,10 +1459,13 @@
+         item_type = item.get("type")
+         role = item.get("role")
+ 
+-        if item_type == "function_call":
++        if item_type in ("function_call", "custom_tool_call"):
+             # Assistant called a tool — record as assistant message with tool_calls
+             name = item.get("name", "")
+-            arguments = item.get("arguments", "{}")
++            if item.get("namespace"):
++                name = f"{item['namespace']}.{name}"
++            arguments = (json.dumps({"input": item.get("input", "")})
++                         if item_type == "custom_tool_call" else item.get("arguments", "{}"))
+             call_id = item.get("call_id", f"call_{uuid.uuid4().hex[:24]}")
+             messages.append(
+                 ChatMessage(
+@@ -1476,7 +1481,7 @@
+                     ],
+                 )
+             )
+-        elif item_type == "function_call_output":
++        elif item_type in ("function_call_output", "custom_tool_call_output"):
+             # Tool result — map to role=tool
+             call_id = item.get("call_id", "")
+             output = item.get("output", "")
+@@ -1502,7 +1507,7 @@
+                     if isinstance(part, dict):
+                         if part.get("type") == "input_text":
+                             text_parts.append(part.get("text", ""))
+-                        elif part.get("type") == "text":
++                        elif part.get("type") in ("text", "output_text"):
+                             text_parts.append(part.get("text", ""))
+                     elif isinstance(part, str):
+                         text_parts.append(part)
+@@ -1512,33 +1517,70 @@
+     return messages
+ 
+ 
+-def _responses_tools_to_chat_tools(
+-    tools: list[dict],
+-) -> list[ToolDefinition]:
+-    """
+-    Convert flat Responses API tool definitions to nested Chat Completions
+-    ToolDefinition format so we can reuse _build_tool_system_prompt().
+-
+-    Responses:  {"type": "function", "name": "X", "parameters": {...}}
+-    Chat:       {"type": "function", "function": {"name": "X", "parameters": {...}}}
+-    """
++def _responses_tool_catalog(tools: list[dict]) -> dict[str, dict]:
++    """Use qualified prompt names while retaining the original wire identity."""
++    catalog = {}
++    def visit(items, namespace=None):
++        for tool in items:
++            kind = tool.get("type")
++            name = tool.get("name")
++            if kind == "namespace":
++                if namespace or not name or not isinstance(tool.get("tools"), list):
++                    raise HTTPException(status_code=400, detail="Invalid tool namespace")
++                visit(tool["tools"], name)
++                continue
++            if kind not in ("function", "custom"):
++                log.warning("Unsupported Responses tool type: %s", kind)
++                continue
++            if not isinstance(name, str) or not name:
++                raise HTTPException(status_code=400, detail="Client tool name is missing")
++            key = f"{namespace}.{name}" if namespace else name
++            if key in catalog:
++                raise HTTPException(status_code=400, detail="Duplicate client tool name")
++            catalog[key] = {**tool, "namespace": namespace}
++    visit(tools)
++    if tools and not catalog:
++        raise HTTPException(status_code=400, detail="No supported client tools: expected function or custom tools")
++    return catalog
++
++
++def _responses_tools_to_chat_tools(tools: list[dict]) -> list[ToolDefinition]:
+     result = []
+-    for tool in tools:
+-        if not isinstance(tool, dict):
+-            tool = tool.model_dump() if hasattr(tool, "model_dump") else dict(tool)
+-        if tool.get("type") != "function":
+-            continue
+-        result.append(
+-            ToolDefinition(
+-                type="function",
+-                function=FunctionDefinition(
+-                    name=tool.get("name", ""),
+-                    description=tool.get("description", ""),
+-                    parameters=tool.get("parameters", {}),
+-                ),
+-            )
+-        )
++    for name, tool in _responses_tool_catalog(tools).items():
++        description = tool.get("description", "")
++        parameters = tool.get("parameters", {})
++        if tool["type"] == "custom":
++            description += "\nReturn the exact raw tool input as the string field input in arguments."
++            if tool.get("format"):
++                description += "\nRequired input format: " + json.dumps(tool["format"])
++            parameters = {"type": "object", "properties": {"input": {"type": "string"}},
++                          "required": ["input"], "additionalProperties": False}
++        result.append(ToolDefinition(type="function", function=FunctionDefinition(
++            name=name, description=description, parameters=parameters)))
+     return result
++
++
++def _responses_call_item(tc: ToolCall, catalog: dict) -> dict:
++    tool = catalog.get(tc.function.name)
++    if tool is None:
++        raise HTTPException(status_code=502, detail="Model returned an unknown client tool")
++    try:
++        arguments = json.loads(tc.function.arguments)
++    except (ValueError, TypeError):
++        raise HTTPException(status_code=502, detail="Model returned invalid tool arguments")
++    if not isinstance(arguments, dict):
++        raise HTTPException(status_code=502, detail="Tool arguments must be an object")
++    item = {"id": f"fc_{uuid.uuid4().hex[:24]}", "type": "function_call",
++            "call_id": tc.id, "name": tool["name"], "status": "completed",
++            "arguments": tc.function.arguments}
++    if tool.get("namespace"):
++        item["namespace"] = tool["namespace"]
++    if tool["type"] == "custom":
++        if set(arguments) != {"input"} or not isinstance(arguments["input"], str):
++            raise HTTPException(status_code=502, detail="Custom tool requires a string input")
++        item.update(id=f"ctc_{uuid.uuid4().hex[:24]}", type="custom_tool_call", input=arguments["input"])
++        del item["arguments"]
++    return item
+ 
+ 
+ def _build_response_object(
+@@ -1555,14 +1597,9 @@
+     output_text_val: str | None = None
+ 
+     if tool_calls:
++        catalog = _responses_tool_catalog(request.tools or [])
+         for tc in tool_calls:
+-            output.append(
+-                ResponseFunctionCall(
+-                    name=tc.function.name,
+-                    arguments=tc.function.arguments,
+-                    call_id=tc.id,
+-                ).model_dump()
+-            )
++            output.append(_responses_call_item(tc, catalog))
+     else:
+         text = response_text or ""
+         msg = ResponseOutputMessage(
+@@ -1645,15 +1682,15 @@
+     if tool_calls:
+         # Emit function call output items
+         for idx, tc in enumerate(tool_calls):
+-            fc_item = ResponseFunctionCall(
+-                name=tc.function.name,
+-                arguments=tc.function.arguments,
+-                call_id=tc.id,
+-            ).model_dump()
++            fc_item = resp_dict["output"][idx]
++            is_custom = fc_item["type"] == "custom_tool_call"
++            payload_key = "input" if is_custom else "arguments"
++            event_prefix = "response.custom_tool_call_input" if is_custom else "response.function_call_arguments"
+ 
+             # output_item.added
+             fc_added = dict(fc_item)
+             fc_added["status"] = "in_progress"
++            fc_added[payload_key] = ""
+             yield _event("response.output_item.added", {
+                 "output_index": idx,
+                 "item": fc_added,
+@@ -1661,19 +1698,19 @@
+             seq += 1
+ 
+             # function_call_arguments.delta (one burst)
+-            yield _event("response.function_call_arguments.delta", {
++            yield _event(event_prefix + ".delta", {
+                 "item_id": fc_item["id"],
+                 "output_index": idx,
+-                "delta": tc.function.arguments,
++                "delta": fc_item[payload_key],
+             })
+             seq += 1
+ 
+             # function_call_arguments.done
+-            yield _event("response.function_call_arguments.done", {
++            yield _event(event_prefix + ".done", {
+                 "item_id": fc_item["id"],
+                 "output_index": idx,
+-                "name": tc.function.name,
+-                "arguments": tc.function.arguments,
++                "name": fc_item["name"],
++                payload_key: fc_item[payload_key],
+             })
+             seq += 1
+ 
+@@ -1686,10 +1723,7 @@
+     else:
+         # Emit text message output
+         text = response_text or ""
+-        msg = ResponseOutputMessage(
+-            content=[ResponseOutputText(text=text)]
+-        )
+-        msg_dict = msg.model_dump()
++        msg_dict = resp_dict["output"][0]
+ 
+         # output_item.added (empty content)
+         msg_added = dict(msg_dict)
+@@ -1803,12 +1837,17 @@
+                 for t in request.tools
+             ]
+             chat_tools = _responses_tools_to_chat_tools(raw_tools)
++            log.info("Responses client tools: %s", [t.function.name for t in chat_tools])
+             if chat_tools and request.tool_choice != "none":
+                 effective_tool_choice = request.tool_choice
+-                if effective_tool_choice in (None, "auto"):
++                last_user_index = max((i for i, msg in enumerate(messages) if msg.role == "user"), default=-1)
++                has_current_tool_result = any(msg.role == "tool" for msg in messages[last_user_index + 1:])
++                if effective_tool_choice in (None, "auto") and not has_current_tool_result:
+                     available_tool_names = {
+                         tool.function.name for tool in chat_tools
+                     }
++                    local_tool_name = next((name for name in sorted(available_tool_names)
++                                            if name.rsplit(".", 1)[-1] in ("exec_command", "shell_command", "shell")), None)
+                     latest_user_text = ""
+                     for candidate in reversed(messages):
+                         if candidate.role == "user":
+@@ -1828,7 +1867,7 @@
+                         "读取文件",
+                     )
+                     if (
+-                        "exec_command" in available_tool_names
++                        local_tool_name is not None
+                         and any(
+                             marker in local_request
+                             for marker in local_markers
+@@ -1836,7 +1875,7 @@
+                     ):
+                         effective_tool_choice = {
+                             "type": "function",
+-                            "function": {"name": "exec_command"},
++                            "function": {"name": local_tool_name},
+                         }
+                         log.info(
+                             "Forcing exec_command for local-state request"
+@@ -1984,6 +2023,15 @@
+             if tool_calls:
+                 response_text = None
+ 
++        if has_tool_prompt and (effective_tool_choice == "required" or isinstance(effective_tool_choice, dict)):
++            forced_name = None
++            if isinstance(effective_tool_choice, dict):
++                forced_name = effective_tool_choice.get("function", {}).get("name") or effective_tool_choice.get("name")
++                if forced_name and effective_tool_choice.get("namespace"):
++                    forced_name = f"{effective_tool_choice['namespace']}.{forced_name}"
++            if not tool_calls or (forced_name and any(tc.function.name != forced_name for tc in tool_calls)):
++                raise HTTPException(status_code=422, detail="Browser model did not return the required client tool call; no local operation was performed")
++
+         # ── Build response ──────────────────────────────────
+         prompt_tokens = _estimate_tokens(prompt)
+         completion_tokens = _estimate_tokens(response_text or "")
+--- a/src/api/openai_schemas.py
++++ b/src/api/openai_schemas.py
+@@ -208,7 +208,7 @@
+     model: str = "catgpt-browser"
+     input: Union[str, List[Any]]  # string or array of messages/items
+     instructions: Optional[str] = None  # system prompt
+-    tools: Optional[List[ResponsesToolDefinition]] = None
++    tools: Optional[List[dict[str, Any]]] = None
+     tool_choice: Optional[Union[str, dict]] = None
+     stream: Optional[bool] = False
+     temperature: Optional[float] = None

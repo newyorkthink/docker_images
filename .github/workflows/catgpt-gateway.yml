@@ -79,6 +79,10 @@ jobs:
             echo "检测到上游 main 更新：执行构建。"
           fi
 
+      - name: Check out compatibility files
+        if: steps.upstream.outputs.build == 'true'
+        uses: actions/checkout@v4
+
       - name: Prepare upstream source
         if: steps.upstream.outputs.build == 'true'
         id: source
@@ -359,6 +363,17 @@ jobs:
 
           print("CatGPT Gateway 上游兼容性检查通过。")
           PY
+
+          # 检查并应用 Codex 工具协议补丁；上游变化导致不匹配时在构建前停止。
+          git -C "${source_dir}" apply --check "${GITHUB_WORKSPACE}/catgpt-gateway/codex-tools.patch"
+          # 应用已通过匹配检查的补丁。
+          git -C "${source_dir}" apply "${GITHUB_WORKSPACE}/catgpt-gateway/codex-tools.patch"
+          # 在临时环境验证请求结构、工具回传和 SSE，不访问浏览器或用户文件。
+          python3 -m venv "${RUNNER_TEMP}/catgpt-protocol-check"
+          # 将请求模型检查依赖安装到临时环境。
+          "${RUNNER_TEMP}/catgpt-protocol-check/bin/pip" install 'pydantic>=2,<3'
+          # 执行离线协议检查，失败时停止构建。
+          "${RUNNER_TEMP}/catgpt-protocol-check/bin/python" "${GITHUB_WORKSPACE}/catgpt-gateway/check-codex-tools.py" "${source_dir}"
 
           echo "dir=${source_dir}" >> "${GITHUB_OUTPUT}"
 
