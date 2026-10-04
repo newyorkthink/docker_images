@@ -21,6 +21,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Checkout upstream whisper.cpp
+        uses: actions/checkout@v7
+        with:
+          repository: ggml-org/whisper.cpp
+          path: whisper-cpp/upstream
+          fetch-depth: 1
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -34,7 +41,8 @@ jobs:
       - name: Build and push whisper.cpp
         uses: docker/build-push-action@v7
         with:
-          context: ./whisper-cpp
+          context: ./whisper-cpp/upstream
+          file: ./whisper-cpp/Dockerfile
           push: true
           platforms: linux/amd64
           tags: ghcr.io/newyorkthink/whisper-cpp:latest
