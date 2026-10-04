@@ -38,14 +38,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push whisper.cpp
+      - name: Build and push whisper.cpp CPU
         uses: docker/build-push-action@v7
         with:
           context: ./whisper-cpp/upstream
-          file: ./whisper-cpp/Dockerfile
+          file: ./whisper-cpp/main.Dockerfile
           push: true
           platforms: linux/amd64
-          tags: ghcr.io/newyorkthink/whisper-cpp:latest
+          tags: |
+            ghcr.io/newyorkthink/whisper-cpp:latest
+            ghcr.io/newyorkthink/whisper-cpp:cpu
           labels: org.opencontainers.image.source=https://github.com/newyorkthink/docker_images
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=whisper-cpp-cpu
+          cache-to: type=gha,mode=max,scope=whisper-cpp-cpu
+
+      - name: Build and push whisper.cpp Vulkan
+        uses: docker/build-push-action@v7
+        with:
+          context: ./whisper-cpp/upstream
+          file: ./whisper-cpp/main-vulkan.Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ghcr.io/newyorkthink/whisper-cpp:vulkan
+          labels: org.opencontainers.image.source=https://github.com/newyorkthink/docker_images
+          cache-from: type=gha,scope=whisper-cpp-vulkan
+          cache-to: type=gha,mode=max,scope=whisper-cpp-vulkan
