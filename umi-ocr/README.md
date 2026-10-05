@@ -12,13 +12,15 @@
 
 ## 官方基线
 
-本目录沿用当前官方 Dockerfile：以 `debian:11-slim` 为基础，安装官方列出的 Qt、Xvfb 和运行依赖，下载并解压官方 Dockerfile 当前指定的 Umi-OCR Linux Paddle 发行包，使用官方 `umi-ocr.sh` 启动程序。
+本目录以当前官方 Dockerfile 为基线；上游使用 `debian:11-slim`，本镜像按下述兼容性修复改用 `debian:12-slim`。其余部分保留官方列出的 Qt、Xvfb 和运行依赖安装命令、发行包下载与解压命令，并使用官方 `umi-ocr.sh` 启动程序。
 
 发行包内附带 PaddleOCR-json CPU 引擎。当前镜像仅构建 `linux/amd64`，运行主机的 CPU 必须支持 AVX；此镜像不提供 GPU OCR。
 
 ## 与官方 Dockerfile 的差异
 
-只增加以下默认环境变量：
+将基础镜像从 `debian:11-slim` 调整为 `debian:12-slim`。实际构建中，Debian 11 的安全更新索引指向已无法下载的依赖包，多项下载返回 `404`，导致依赖安装失败。Umi-OCR 上游列明已测试 Debian 12；依赖包列表和安装命令保持不变。
+
+同时增加以下默认环境变量：
 
 ```dockerfile
 # 默认使用官方无头模式，提供 HTTP 接口服务
@@ -27,7 +29,7 @@ ENV HEADLESS=true
 
 官方启动脚本在此变量为 `true` 时通过 Xvfb 启用无头模式。将它设为镜像默认值，是为了让容器在没有宿主机桌面连接的情况下直接提供 HTTP 服务，避免默认进入需要 `DISPLAY` 的 GUI 模式。
 
-官方基础镜像、依赖安装命令、发行包下载与解压命令、HTTP 预配置和启动入口均原样保留。构建工作流按本仓库现有方式添加 GHCR 来源标签。
+官方依赖安装命令、发行包下载与解压命令、HTTP 预配置和启动入口均原样保留。构建工作流按本仓库现有方式添加 GHCR 来源标签。
 
 ## GHCR 镜像
 
