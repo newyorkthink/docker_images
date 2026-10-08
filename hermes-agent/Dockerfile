@@ -73,33 +73,27 @@ RUN /usr/bin/python3 -c 'import PIL, gi; from elftools.elf.elffile import ELFFil
     command -v unsquashfs >/dev/null && \
     grep -qx 'MimeType=application/vnd.appimage;' /usr/share/thumbnailers/xapp-appimage-thumbnailer.thumbnailer
 
-# Hermes Desktop 按键录音使用 faster-whisper；默认 Wake word 使用 pyopen-wakeword 的 TFLite 后端。
-# 依赖约束从当前上游基础镜像的 /opt/hermes/uv.lock 动态生成。已经锁住的包跟随锁定版本，
-# 避免旧 pin 和上游锁文件冲突；锁文件没有的包才使用这里的回退版本。
-# 上游已停用 openWakeWord 的 ONNX 模型和 download_models；默认模型是镜像内的 hey_hermes.tflite，共享特征模型在 pyopen-wakeword wheel 里。
-# 新版上游镜像仍在 /opt/hermes/tools/uv-<version>-<target>/uv 保留已校验的 uv，但不再放到 PATH。
-# 优先链接这份 uv；只有镜像里确实没有安装器时，才安装官方 uv 到 /usr/local/bin。
-RUN set -euo pipefail; \
-    if ! command -v uv >/dev/null 2>&1; then \
-        uv_bin=""; \
-        if uv_bin="$(cd /opt/hermes && python3 -c 'from pm import installed_package; package=installed_package("uv"); print("" if package is None or package.binary is None else package.binary)' 2>/dev/null)" && test -n "$uv_bin" && test -x "$uv_bin"; then \
-            ln -sfn "$uv_bin" /usr/local/bin/uv; \
-        else \
-            uv_bin="$(find /opt/hermes/tools -type f -path '*/uv-*/uv' -perm -111 -print -quit || true)"; \
-            if test -n "$uv_bin" && test -x "$uv_bin"; then \
-                ln -sfn "$uv_bin" /usr/local/bin/uv; \
-            else \
-                curl -fsSL https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh; \
-            fi; \
-        fi; \
-    fi; \
-    command -v uv >/dev/null; \
+# Hermes Desktop 按键录音使用 faster-whisper；默认 Wake word 使用 pyopen-wakeword 和镜像内的 hey_hermes.tflite。
+# 依赖约束仍从上游 uv.lock 生成。tqdm、onnxruntime 跟随当前锁文件版本，避免和锁文件 pin 冲突。
+# 上游镜像把 uv 留在 /opt/hermes/tools，不再放到 PATH。
+RUN uv_bin="$(find /opt/hermes/tools -type f -path '*/uv-*/uv' -perm -111 -print -quit)" && \
+    test -x "$uv_bin" && \
+    ln -sfn "$uv_bin" /usr/local/bin/uv && \
     uv --version
-RUN /opt/hermes/.venv/bin/python -c 'from pathlib import Path; import tomllib; from packaging.markers import Marker; lock=tomllib.loads(Path("/opt/hermes/uv.lock").read_text(encoding="utf-8")); selected=[p for p in lock["package"] if "registry" in p.get("source",{}) and (not p.get("resolution-markers") or any(Marker(m).evaluate() for m in p["resolution-markers"]))]; assert len({p["name"] for p in selected}) == len(selected), "duplicate active package versions in uv.lock"; locked={p["name"]: p["version"] for p in selected}; Path("/tmp/hermes-uv-lock-constraints.txt").write_text("\n".join(sorted("{}=={}".format(name, version) for name, version in locked.items()))+"\n", encoding="utf-8"); fallback={"faster-whisper":"1.2.1","onnxruntime":"1.29.0","sounddevice":"0.5.5","numpy":"2.4.3","requests":"2.33.0","scikit-learn":"1.9.0","scipy":"1.18.0","tqdm":"4.70.0","pyopen-wakeword":"1.1.0"}; resolved={name: locked.get(name, version) for name, version in fallback.items()}; Path("/tmp/hermes-voice-requirements.txt").write_text("\n".join("{}=={}".format(name, version) for name, version in sorted(resolved.items()))+"\n", encoding="utf-8"); Path("/tmp/hermes-voice-expected.txt").write_text("\n".join("{}=={}".format(name, version) for name, version in sorted(resolved.items()))+"\n", encoding="utf-8"); print({name: (version, "lock" if name in locked else "fallback") for name, version in resolved.items()})' && \
-    uv pip install --python /opt/hermes/.venv/bin/python --constraint /tmp/hermes-uv-lock-constraints.txt -r /tmp/hermes-voice-requirements.txt && \
-    /command/s6-setuidgid hermes /opt/hermes/.venv/bin/python -c 'from pathlib import Path; from pyopen_wakeword import OpenWakeWord, OpenWakeWordFeatures; model_path=Path("/opt/hermes/tools/wakewords/hey_hermes.tflite"); assert model_path.is_file() and model_path.stat().st_size, model_path; features=OpenWakeWordFeatures.from_builtin(); model=OpenWakeWord.from_model(str(model_path)); assert model.id == "hey_hermes", model.id; features.close(); model.close(); print("pyopen-wakeword model load OK", model_path)' && \
-    /opt/hermes/.venv/bin/python -c 'from importlib.metadata import distributions, version; from pathlib import Path; from packaging.utils import canonicalize_name; locked=dict(line.rsplit("==",1) for line in Path("/tmp/hermes-uv-lock-constraints.txt").read_text(encoding="utf-8").splitlines()); locked={canonicalize_name(name):value for name,value in locked.items()}; actual={canonicalize_name(dist.metadata["Name"]):dist.version for dist in distributions() if dist.metadata.get("Name")}; drift={name:(value,locked[name]) for name,value in actual.items() if name in locked and value != locked[name]}; assert not drift, drift; expected=dict(line.rsplit("==",1) for line in Path("/tmp/hermes-voice-expected.txt").read_text(encoding="utf-8").splitlines()); installed={name:version(name) for name in expected}; assert installed == expected, (installed,expected); from faster_whisper import WhisperModel; from pyopen_wakeword import OpenWakeWord; import numpy, onnxruntime, requests, scipy, sklearn, sounddevice, tqdm; print("Hermes voice and wake-word dependencies OK", installed)' && \
-    rm -f /tmp/hermes-uv-lock-constraints.txt /tmp/hermes-voice-requirements.txt /tmp/hermes-voice-expected.txt
+RUN /opt/hermes/.venv/bin/python -c 'from pathlib import Path; import tomllib; from packaging.markers import Marker; lock=tomllib.loads(Path("/opt/hermes/uv.lock").read_text(encoding="utf-8")); selected=[p for p in lock["package"] if "registry" in p.get("source",{}) and (not p.get("resolution-markers") or any(Marker(m).evaluate() for m in p["resolution-markers"]))]; assert len({p["name"] for p in selected}) == len(selected), "duplicate active package versions in uv.lock"; Path("/tmp/hermes-uv-lock-constraints.txt").write_text("\n".join(sorted(f"{p['"'"'name'"'"']}=={p['"'"'version'"'"']}" for p in selected))+"\n", encoding="utf-8")' && \
+    uv pip install --python /opt/hermes/.venv/bin/python --constraint /tmp/hermes-uv-lock-constraints.txt \
+        "faster-whisper==1.2.1" \
+        "onnxruntime==1.29.0" \
+        "sounddevice==0.5.5" \
+        "numpy==2.4.3" \
+        "requests==2.33.0" \
+        "scikit-learn==1.9.0" \
+        "scipy==1.18.0" \
+        "tqdm==4.70.0" \
+        "pyopen-wakeword==1.1.0" && \
+    /command/s6-setuidgid hermes /opt/hermes/.venv/bin/python -c 'from pathlib import Path; from pyopen_wakeword import OpenWakeWord, OpenWakeWordFeatures; model_path=Path("/opt/hermes/tools/wakewords/hey_hermes.tflite"); assert model_path.is_file() and model_path.stat().st_size, model_path; features=OpenWakeWordFeatures.from_builtin(); model=OpenWakeWord.from_model(str(model_path)); assert model.id == "hey_hermes", model.id; features.close(); model.close(); print("pyopen-wakeword model load OK")' && \
+    /opt/hermes/.venv/bin/python -c 'from importlib.metadata import distributions, version; from pathlib import Path; from packaging.utils import canonicalize_name; locked=dict(line.rsplit("==",1) for line in Path("/tmp/hermes-uv-lock-constraints.txt").read_text(encoding="utf-8").splitlines()); locked={canonicalize_name(name):value for name,value in locked.items()}; actual={canonicalize_name(dist.metadata["Name"]):dist.version for dist in distributions() if dist.metadata.get("Name")}; drift={name:(value,locked[name]) for name,value in actual.items() if name in locked and value != locked[name]}; assert not drift, drift; from faster_whisper import WhisperModel; from pyopen_wakeword import OpenWakeWord; import numpy, onnxruntime, requests, scipy, sklearn, sounddevice, tqdm; expected={"faster-whisper":"1.2.1","pyopen-wakeword":"1.1.0","onnxruntime":"1.29.0","sounddevice":"0.5.5","numpy":"2.4.3","requests":"2.33.0","scikit-learn":"1.9.0","scipy":"1.18.0","tqdm":"4.70.0"}; installed={name:version(name) for name in expected}; assert installed == expected, (installed,expected); print("Hermes voice and wake-word dependencies OK")' && \
+    rm -f /tmp/hermes-uv-lock-constraints.txt
 
 # 复制与最终镜像 PulseAudio 版本匹配的 xrdp 音频模块；RDP 音频通过虚拟通道转发，不需要映射宿主机声卡设备。
 COPY --from=pulseaudio-xrdp-builder /tmp/pulseaudio-xrdp-root/ /
