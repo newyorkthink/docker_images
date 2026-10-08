@@ -74,7 +74,7 @@ RUN /usr/bin/python3 -c 'import PIL, gi; from elftools.elf.elffile import ELFFil
     grep -qx 'MimeType=application/vnd.appimage;' /usr/share/thumbnailers/xapp-appimage-thumbnailer.thumbnailer
 
 # Hermes Desktop 按键录音使用 faster-whisper；默认 Wake word 使用 pyopen-wakeword 和镜像内的 hey_hermes.tflite。
-# 这两个包不在官方发布镜像的 extra 里。按官方方式用 pm.build_env 另建环境，
+# Edge TTS 是上游默认朗读，发布镜像同样没装。这些包按官方方式用 pm.build_env 另建环境，
 # 不把 uv 放进 PATH，也不改已经封好的 /opt/hermes/.venv。
 RUN /usr/local/bin/python3 -m pm.build_env \
         --python /usr/local/bin/python3 \
@@ -88,13 +88,14 @@ RUN /usr/local/bin/python3 -m pm.build_env \
         --requirement "scikit-learn==1.9.0" \
         --requirement "scipy==1.18.0" \
         --requirement "tqdm==4.70.0" \
-        --requirement "pyopen-wakeword==1.1.0" && \
+        --requirement "pyopen-wakeword==1.1.0" \
+        --requirement "edge-tts==7.2.7" && \
     voice_site="$(/opt/hermes/voice-deps/bin/python -c 'import site; print(site.getsitepackages()[0])')" && \
     venv_site="$(/opt/hermes/.venv/bin/python -c 'import site; print(site.getsitepackages()[0])')" && \
     printf '%s\n' "$voice_site" > "$venv_site/hermes-voice-deps.pth" && \
     chmod -R a+rX /opt/hermes/voice-deps && \
     /command/s6-setuidgid hermes /opt/hermes/.venv/bin/python -c 'from pathlib import Path; from pyopen_wakeword import OpenWakeWord, OpenWakeWordFeatures; model_path=Path("/opt/hermes/tools/wakewords/hey_hermes.tflite"); assert model_path.is_file() and model_path.stat().st_size, model_path; features=OpenWakeWordFeatures.from_builtin(); model=OpenWakeWord.from_model(str(model_path)); assert model.id == "hey_hermes", model.id; features.close(); model.close(); print("pyopen-wakeword model load OK")' && \
-    /opt/hermes/.venv/bin/python -c 'from importlib.metadata import version; from faster_whisper import WhisperModel; from pyopen_wakeword import OpenWakeWord; import numpy, onnxruntime, requests, scipy, sklearn, sounddevice, tqdm; expected={"faster-whisper":"1.2.1","pyopen-wakeword":"1.1.0","onnxruntime":"1.29.0","sounddevice":"0.5.5","numpy":"2.4.3","requests":"2.33.0","scikit-learn":"1.9.0","scipy":"1.18.0","tqdm":"4.70.0"}; installed={name:version(name) for name in expected}; assert installed == expected, (installed, expected); print("Hermes voice and wake-word dependencies OK")'
+    /opt/hermes/.venv/bin/python -c 'from importlib.metadata import version; from faster_whisper import WhisperModel; from pyopen_wakeword import OpenWakeWord; import numpy, onnxruntime, requests, scipy, sklearn, sounddevice, tqdm; import edge_tts; expected={"faster-whisper":"1.2.1","pyopen-wakeword":"1.1.0","edge-tts":"7.2.7","onnxruntime":"1.29.0","sounddevice":"0.5.5","numpy":"2.4.3","requests":"2.33.0","scikit-learn":"1.9.0","scipy":"1.18.0","tqdm":"4.70.0"}; installed={name:version(name) for name in expected}; assert installed == expected, (installed, expected); print("Hermes voice, wake-word and Edge TTS dependencies OK")'
 
 # 复制与最终镜像 PulseAudio 版本匹配的 xrdp 音频模块；RDP 音频通过虚拟通道转发，不需要映射宿主机声卡设备。
 COPY --from=pulseaudio-xrdp-builder /tmp/pulseaudio-xrdp-root/ /
