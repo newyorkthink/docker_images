@@ -76,6 +76,24 @@ RUN /usr/bin/python3 -c 'import PIL, gi; from elftools.elf.elffile import ELFFil
 # Hermes Desktop 按键录音使用 faster-whisper；默认 Wake word 在 Linux 上使用 openWakeWord 的 ONNX 后端。
 # 依赖约束从当前上游基础镜像的 /opt/hermes/uv.lock 动态生成；先锁齐 ONNX 运行依赖，再跳过 openwakeword 在 Linux 上声明但 CPython 3.13 无可用 wheel、且 ONNX 后端不使用的 tflite-runtime。
 # openwakeword wheel 不包含共享模型；构建时调用上游下载器写入模型，并以实际运行用户 hermes 完成一次 ONNX 加载检查。
+# 新版上游镜像仍在 /opt/hermes/tools/uv-<version>-<target>/uv 保留已校验的 uv，但不再放到 PATH。
+# 优先链接这份 uv；只有镜像里确实没有安装器时，才安装官方 uv 到 /usr/local/bin。
+RUN set -euo pipefail; \
+    if ! command -v uv >/dev/null 2>&1; then \
+        uv_bin=""; \
+        if uv_bin="$(cd /opt/hermes && python3 -c 'from pm import installed_package; package=installed_package("uv"); print("" if package is None or package.binary is None else package.binary)' 2>/dev/null)" && test -n "$uv_bin" && test -x "$uv_bin"; then \
+            ln -sfn "$uv_bin" /usr/local/bin/uv; \
+        else \
+            uv_bin="$(find /opt/hermes/tools -type f -path '*/uv-*/uv' -perm -111 -print -quit || true)"; \
+            if test -n "$uv_bin" && test -x "$uv_bin"; then \
+                ln -sfn "$uv_bin" /usr/local/bin/uv; \
+            else \
+                curl -fsSL https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh; \
+            fi; \
+        fi; \
+    fi; \
+    command -v uv >/dev/null; \
+    uv --version
 RUN /opt/hermes/.venv/bin/python -c 'from pathlib import Path; import tomllib; from packaging.markers import Marker; lock=tomllib.loads(Path("/opt/hermes/uv.lock").read_text(encoding="utf-8")); selected=[p for p in lock["package"] if "registry" in p.get("source",{}) and (not p.get("resolution-markers") or any(Marker(m).evaluate() for m in p["resolution-markers"]))]; assert len({p["name"] for p in selected}) == len(selected), "duplicate active package versions in uv.lock"; Path("/tmp/hermes-uv-lock-constraints.txt").write_text("\n".join(sorted(f"{p['"'"'name'"'"']}=={p['"'"'version'"'"']}" for p in selected))+"\n", encoding="utf-8")' && \
     uv pip install --python /opt/hermes/.venv/bin/python --constraint /tmp/hermes-uv-lock-constraints.txt \
         "faster-whisper==1.2.1" \
