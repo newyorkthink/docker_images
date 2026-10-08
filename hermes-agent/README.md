@@ -13,7 +13,7 @@
 - AppImage 桌面支持：`tumbler`、`shared-mime-info`、`libfuse2t64`、`python3-gi`、`python3-pil`、`python3-pyelftools`、`gir1.2-xapp-1.0`、`squashfs-tools`，并内置 Linux Mint `xapp-thumbnailers 1.2.10` 的 AppImage 缩略图实现
 - RDP / VNC：`xrdp`、`xorgxrdp`、`xvfb`、`x11vnc`、`novnc`、`websockify`
 - RDP 音频：`pulseaudio` + 官方 [`neutrinolabs/pulseaudio-module-xrdp v0.8`](https://github.com/neutrinolabs/pulseaudio-module-xrdp/tree/v0.8)；模块在独立阶段按最终镜像的 PulseAudio 版本编译
-- Hermes 语音运行时：`faster-whisper==1.2.1`、`pyopen-wakeword==1.1.0`、`onnxruntime==1.29.0`、`sounddevice==0.5.5`、`numpy==2.4.3`、`requests==2.33.0`、`scikit-learn==1.9.0`、`scipy==1.18.0`、`tqdm==4.70.0` + `libportaudio2`。已经写进上游 `uv.lock` 的包跟随锁定版本；Wake word 使用镜像内的 `hey_hermes.tflite`，构建期以 `hermes` 用户实际加载
+- Hermes 语音运行时：`faster-whisper==1.2.1`、`pyopen-wakeword==1.1.0`、`onnxruntime==1.29.0`、`sounddevice==0.5.5`、`numpy==2.4.3`、`requests==2.33.0`、`scikit-learn==1.9.0`、`scipy==1.18.0`、`tqdm==4.70.0` + `libportaudio2`。用官方 `pm.build_env` 装到独立环境 `/opt/hermes/voice-deps`，不把 `uv` 放进 PATH，也不改封好的 `/opt/hermes/.venv`；Wake word 使用镜像内的 `hey_hermes.tflite`，构建期以 `hermes` 用户实际加载
 - X11 与桌面控制：`xserver-xorg-core`、`xserver-xorg`、`xinit`、`xauth`、`x11-utils`、`x11-xserver-utils`、`dbus-x11`、`at-spi2-core`、`xdotool`、`wmctrl`、`scrot`、`xclip`
 - 中文输入法：`fcitx5`、`fcitx5-chinese-addons`、`fcitx5-frontend-gtk3`、`fcitx5-frontend-qt5`、`fcitx5-frontend-qt6`、`im-config`
 - 字体与图标：`fonts-noto`、`fonts-noto-cjk`、`fonts-noto-color-emoji`、`fonts-liberation`、`fonts-dejavu`、`fonts-wqy-zenhei`、`fonts-wqy-microhei`、`xfonts-base`、`xfonts-75dpi`、`fontconfig`、`adwaita-icon-theme`、`adwaita-icon-theme-legacy`、`breeze-icon-theme`、`lxde-icon-theme`
@@ -291,7 +291,7 @@ Wake-word input device could not be resolved: PortAudio library not found
 
 更早的镜像还可能显示 `Feature 'wake.openwakeword' unavailable`，或 `melspectrogram.onnx` 不存在。那是上游仍使用 `openwakeword` ONNX 后端时的问题：旧 pin 和锁文件冲突，而且该 wheel 不带共享 ONNX 模型，运行时又不能写入 root 所有的 `.venv`。
 
-当前上游已经停用 ONNX wake 模型和 `download_models`。Dockerfile 仍从基础镜像的 `uv.lock` 生成约束，直接安装 `pyopen-wakeword==1.1.0`，并在构建期以 `hermes` 用户加载镜像内的 `hey_hermes.tflite`。不要再手工执行 `uv pip install openwakeword`，也不要把 `.venv` 改成所有用户可写。使用这套修复需要拉取新镜像并重新创建容器。
+当前上游已经停用 ONNX wake 模型和 `download_models`。Dockerfile 用官方 `pm.build_env` 把 `pyopen-wakeword==1.1.0` 装到独立环境，并在构建期以 `hermes` 用户加载镜像内的 `hey_hermes.tflite`。不要再手工执行 `uv pip install`，也不要把 `.venv` 改成所有用户可写。使用这套修复需要拉取新镜像并重新创建容器。
 
 `libportaudio2` 只修复“系统库缺失”这一层。按 [Hermes 上游 Wake word 文档](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/wake-word.md)，Wake word 监听器运行在 Python 后端；Desktop 远程连接 Docker 后端时，客户端按键录音可用，并不证明容器后端也拥有输入设备。若系统库修复后改为提示没有可用输入设备，应继续检查后端可见的麦克风，而不是修改已经有效的 RDP 播放参数。
 
@@ -417,7 +417,7 @@ docker run -d \
 
 ### 后台为什么显示 `numpy==2.4.3` 与 `numpy==2.5.1` 冲突
 
-这是旧镜像的 Python 依赖版本冲突，不是插件文件缺失。当前上游默认 Wake word 已改为 `pyopen-wakeword==1.1.0`，不再安装 `openwakeword`，也不再要求 `onnxruntime==1.27.0`。Dockerfile 从基础镜像 `uv.lock` 生成约束后安装当前锁定版本；更新镜像并重新创建容器后，不要再按旧报错手工执行 `uv pip install`。
+这是旧镜像的 Python 依赖版本冲突，不是插件文件缺失。当前上游默认 Wake word 已改为 `pyopen-wakeword==1.1.0`，不再安装 `openwakeword`，也不再要求 `onnxruntime==1.27.0`。Dockerfile 用官方 `pm.build_env` 把当前版本装到独立环境；更新镜像并重新创建容器后，不要再按旧报错手工执行 `uv pip install`。
 
 ### 后台为什么显示 `melspectrogram.onnx` 不存在
 
@@ -527,7 +527,7 @@ XMODIFIERS=@im=fcitx
 - **VNC / noVNC 剪贴板偶发失效或中文乱码**：两者最终都经过 x11vnc 剪贴板同步链路，noVNC 还多一层浏览器/WebSocket。该问题不是缺少 `zh_CN.UTF-8`。已评估 TigerVNC `x0vncserver`，但现有 RDP/VNC/noVNC 主链路可用，因此把该项保留为已知限制，不为单一剪贴板问题替换整个 VNC 后端。
 - **RDP 有画面但没有声音**：服务端使用官方 `pulseaudio-module-xrdp`，并由 `/etc/xrdp/startwm.sh` 显式启动会话级 PulseAudio 和加载 xrdp 模块。若同一服务端的 xfreerdp `/sound:sys:pulse` 已有声音，不应再替换服务端音频架构；Remmina 的 Hermes 条目必须同时设置“声音 = 本地”和 `audio-output=sys:pulse`，并在保存后重连。
 - **Wake word 显示 `PortAudio library not found`**：这是后端 `sounddevice` 缺少 `libportaudio.so.2`，不是 Hermes 插件缺失，也与 `rdpsnd` 播放链路无关。Dockerfile 已加入 `libportaudio2`；系统库修复后仍可能需要单独解决 Docker 后端看不到麦克风输入的问题。
-- **Wake word 懒安装显示版本无解，或 `melspectrogram.onnx` 不存在**：这是旧的 `openwakeword` ONNX 后端问题。当前上游默认引擎是 `pyopen-wakeword==1.1.0`，热词模型是镜像内的 `hey_hermes.tflite`，特征模型在 wheel 里。Dockerfile 仍用基础镜像 `uv.lock` 约束安装，并在构建期以 `hermes` 用户加载模型；不要在运行中的容器里按旧报错覆盖这些包。
+- **Wake word 懒安装显示版本无解，或 `melspectrogram.onnx` 不存在**：这是旧的 `openwakeword` ONNX 后端问题。当前上游默认引擎是 `pyopen-wakeword==1.1.0`，热词模型是镜像内的 `hey_hermes.tflite`，特征模型在 wheel 里。Dockerfile 用官方 `pm.build_env` 安装，并在构建期以 `hermes` 用户加载模型；不要在运行中的容器里按旧报错覆盖这些包。
 - **xrdp 会话 socket 权限问题**：容器没有 systemd 代替 Debian 服务做初始化时，必须显式执行 `/usr/share/xrdp/socksetup`；同时 `SessionSockdirGroup` 使用 `xrdp`，否则可能出现 `Error connecting to user session` 一类连接失败。
 - **RDP 共享目录不是普通宿主机挂载**：目录重定向依赖 `chansrv + FUSE`，容器需要 `SYS_ADMIN` 和 `/dev/fuse`。`/opt/data/thinclient_drives/` 是用户会话内的 FUSE 挂载，因此 `docker exec` 直接访问遇到权限问题不能单独作为共享失败依据，应以 RDP 会话内能否正常访问为准。
 - **外部 AppImage 在共享盘不能直接执行、复制后却能双击运行**：`thinclient_drives` 是 xrdp FUSE 重定向盘，不作为程序执行目录。AppImage 复制到 `/opt/data` 后，只要已有执行权限即可沿用正常 FUSE 启动；`--appimage-extract-and-run` 仅保留为 FUSE 失败时的后备。镜像补 `libfuse2t64` 兼容仍依赖 FUSE 2 用户态库的旧 AppImage，不额外安装旧 `fuse` 包，也不新增现有共享目录之外的容器权限。
@@ -556,7 +556,7 @@ XMODIFIERS=@im=fcitx
 - noVNC 没有独立密码，统一使用 `VNC_PASSWORD`；根地址通过 `index.html -> vnc.html` 直接进入客户端，不再暴露静态目录列表。
 - 直接 VNC 和 noVNC 的剪贴板都依赖 x11vnc，偶发复制/粘贴失效以及 noVNC 中文乱码作为已知兼容性限制保留。当前 RDP、VNC、noVNC 均可正常作为远程桌面使用，因此不为该单一问题替换 x11vnc 或切换到 TigerVNC/x0vncserver，避免破坏现有稳定架构。
 - RDP 音频使用官方 `pulseaudio-module-xrdp v0.8`；模块在独立构建阶段按最终镜像的 PulseAudio 版本编译，每个 xorgxrdp 会话显式启动会话级 PulseAudio 并加载 xrdp 模块，不依赖完整桌面环境的 XDG Autostart。
-- RDP 播放、Desktop 按键录音和 Wake word 后端监听是三条独立链路。按键录音安装 `faster-whisper`；Wake word 安装上游当前的 `pyopen-wakeword`，不再使用 `openwakeword` 的 ONNX 后端。已锁定的包跟随基础镜像 `uv.lock`。`libportaudio2` 只解决系统运行库，不能代替实际麦克风输入，也不能替代 Remmina 的 `audio-output=sys:pulse`。
+- RDP 播放、Desktop 按键录音和 Wake word 后端监听是三条独立链路。按键录音安装 `faster-whisper`；Wake word 安装上游当前的 `pyopen-wakeword`，不再使用 `openwakeword` 的 ONNX 后端。安装走官方 `pm.build_env`，不改封好的 venv。`libportaudio2` 只解决系统运行库，不能代替实际麦克风输入，也不能替代 Remmina 的 `audio-output=sys:pulse`。
 - `xdg-user-dirs` 负责桌面目录本地化，脚本通过 `xdg-user-dir DESKTOP` 获取实际路径，不写死英文 `~/Desktop`。
 - 桌面启动器只做一次性初始化。这样既能给首次使用者一个可点击的应用入口，又不会在用户后续主动删除或自定义桌面后反复写回。
 
