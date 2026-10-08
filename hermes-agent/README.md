@@ -13,7 +13,7 @@
 - AppImage 桌面支持：`tumbler`、`shared-mime-info`、`libfuse2t64`、`python3-gi`、`python3-pil`、`python3-pyelftools`、`gir1.2-xapp-1.0`、`squashfs-tools`，并内置 Linux Mint `xapp-thumbnailers 1.2.10` 的 AppImage 缩略图实现
 - RDP / VNC：`xrdp`、`xorgxrdp`、`xvfb`、`x11vnc`、`novnc`、`websockify`
 - RDP 音频：`pulseaudio` + 官方 [`neutrinolabs/pulseaudio-module-xrdp v0.8`](https://github.com/neutrinolabs/pulseaudio-module-xrdp/tree/v0.8)；模块在独立阶段按最终镜像的 PulseAudio 版本编译
-- Hermes 语音运行时：`faster-whisper==1.2.1`、`pyopen-wakeword==1.1.0`、`onnxruntime==1.29.0`、`sounddevice==0.5.5`、`numpy==2.4.3`、`requests==2.33.0`、`scikit-learn==1.9.0`、`scipy==1.18.0`、`tqdm==4.70.0` + `libportaudio2`。用官方 `pm.build_env` 装到独立环境 `/opt/hermes/voice-deps`，不把 `uv` 放进 PATH，也不改封好的 `/opt/hermes/.venv`；Wake word 使用镜像内的 `hey_hermes.tflite`，构建期以 `hermes` 用户实际加载
+- Hermes 语音运行时：`faster-whisper==1.2.1`、`pyopen-wakeword==1.1.0`、`edge-tts==7.2.7`、`onnxruntime==1.29.0`、`sounddevice==0.5.5`、`numpy==2.4.3`、`requests==2.33.0`、`scikit-learn==1.9.0`、`scipy==1.18.0`、`tqdm==4.70.0` + `libportaudio2`。用官方 `pm.build_env` 装到独立环境 `/opt/hermes/voice-deps`，不把 `uv` 放进 PATH，也不改封好的 `/opt/hermes/.venv`；Wake word 使用镜像内的 `hey_hermes.tflite`，构建期以 `hermes` 用户实际加载
 - X11 与桌面控制：`xserver-xorg-core`、`xserver-xorg`、`xinit`、`xauth`、`x11-utils`、`x11-xserver-utils`、`dbus-x11`、`at-spi2-core`、`xdotool`、`wmctrl`、`scrot`、`xclip`
 - 中文输入法：`fcitx5`、`fcitx5-chinese-addons`、`fcitx5-frontend-gtk3`、`fcitx5-frontend-qt5`、`fcitx5-frontend-qt6`、`im-config`
 - 字体与图标：`fonts-noto`、`fonts-noto-cjk`、`fonts-noto-color-emoji`、`fonts-liberation`、`fonts-dejavu`、`fonts-wqy-zenhei`、`fonts-wqy-microhei`、`xfonts-base`、`xfonts-75dpi`、`fontconfig`、`adwaita-icon-theme`、`adwaita-icon-theme-legacy`、`breeze-icon-theme`、`lxde-icon-theme`
