@@ -567,7 +567,7 @@ Dockerfile 在构建阶段检查以下关键链路，任一关键文件或命令
 - xrdp / Xorg / Xvfb / x11vnc / noVNC
 - PulseAudio / `pactl` / `module-xrdp-sink.so` / `module-xrdp-source.so` / xrdp 音频加载脚本
 - `libportaudio2`（Wake word 的 PortAudio 系统运行库）
-- `faster-whisper==1.2.1`、`pyopen-wakeword==1.1.0`、`onnxruntime==1.29.0`、`sounddevice==0.5.5`、`numpy==2.4.3`、`tqdm==4.70.0` 的安装、导入与实际版本，以及 `hermes` 用户加载 `hey_hermes.tflite`
+- 语音独立环境 `/opt/hermes/voice-deps` 中上述 10 个依赖的固定版本；Hermes 主环境 `/opt/hermes/.venv` 中的依赖导入，以及 `hermes` 用户加载 `hey_hermes.tflite`。主环境保留上游已有的同名包版本，不要求与语音独立环境一致
 - Openbox / tint2 / xfdesktop
 - `xfce4-appfinder`、`xdg-user-dirs`、`gio`
 - Thunar、Xfce FileManager helper、`xfce4-terminal`
