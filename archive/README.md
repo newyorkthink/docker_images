@@ -6,6 +6,7 @@
 
 | 目录 | 原镜像 | 原构建工作流 |
 |---|---|---|
+| [`catgpt-gateway/`](./catgpt-gateway) | `ghcr.io/newyorkthink/catgpt-gateway:latest` | [`.github/workflows/catgpt-gateway.yml`](./workflows/catgpt-gateway.yml) |
 
 ## 归档与恢复
 
