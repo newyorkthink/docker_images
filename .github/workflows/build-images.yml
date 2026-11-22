@@ -1,11 +1,25 @@
 name: Build Docker Images
-run-name: Build Docker Images (${{ inputs.image }})
+run-name: >-
+  ${{ (github.event_name == 'workflow_dispatch' && inputs.image == 'cleanup' || github.event_name == 'schedule' && github.event.schedule == '43 2 * * *') && 'Cleanup Actions Runs' || github.event_name == 'workflow_dispatch' && format('Build Docker Images ({0})', inputs.image) || 'Build Docker Images' }}
 
 on:
+  push:
+    paths:
+      - 'hermes-agent/Dockerfile'
+      - 'hermes-agent/docker/**'
+      - 'hermes-agent/.dockerignore'
+      - 'paddleocr/**'
+      - 'spoofdpi/**'
+      - 'umi-ocr/**'
+      - 'whisper-cpp/**'
+  schedule:
+    - cron: '17 */6 * * *'
+    - cron: '0 0 * * *'
+    - cron: '43 2 * * *'
   workflow_dispatch:
     inputs:
       image:
-        description: '选择要构建的镜像（选择 all 构建全部）'
+        description: '选择镜像或清理操作（选择 all 构建全部镜像）'
         required: true
         default: 'all'
         type: choice
@@ -16,41 +30,454 @@ on:
           - spoofdpi
           - umi-ocr
           - whisper-cpp
+          - cleanup
 
 permissions:
-  actions: write
+  contents: read
 
 jobs:
-  dispatch:
-    name: Dispatch ${{ matrix.image }}
-    if: github.ref == 'refs/heads/main'
+  plan:
+    name: Select images
+    if: >-
+      ${{ github.event_name == 'push' && !github.event.deleted ||
+      github.event_name == 'schedule' && github.event.schedule != '43 2 * * *' ||
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.image != 'cleanup' }}
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        image: >-
-          ${{ fromJSON(inputs.image == 'all'
-          && '["hermes-agent","paddleocr","spoofdpi","umi-ocr","whisper-cpp"]'
-          || format('[{0}]', toJSON(inputs.image))) }}
+    outputs:
+      images: ${{ steps.select.outputs.images }}
+    steps:
+      - name: Checkout push history
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Select images
+        id: select
+        shell: bash
+        env:
+          REQUESTED_IMAGE: ${{ inputs.image }}
+          SCHEDULE: ${{ github.event.schedule }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+          ROUTES: |
+            hermes-agent|main|17 */6 * * *|hermes-agent/Dockerfile|hermes-agent/docker/**|hermes-agent/.dockerignore
+            paddleocr|main||paddleocr/**
+            spoofdpi|any|0 0 * * *|spoofdpi/**
+            umi-ocr|main||umi-ocr/**
+            whisper-cpp|any|0 0 * * *|whisper-cpp/**
+        run: |
+          set -Eeuo pipefail
+
+          changed_paths=()
+          if [[ "${GITHUB_EVENT_NAME}" == push && "${GITHUB_REF}" == refs/heads/* ]]; then
+            [[ "${PUSH_BEFORE}" =~ ^[0-9a-f]{40}$ && "${PUSH_AFTER}" =~ ^[0-9a-f]{40}$ ]]
+            base="${PUSH_BEFORE}"
+            if [[ "${base}" == 0000000000000000000000000000000000000000 ]]; then
+              pushed_commits="$(jq -r '.commits[]?.id // empty' "${GITHUB_EVENT_PATH}")"
+              if [[ -z "${pushed_commits}" ]]; then
+                printf 'images=[]\n' >> "${GITHUB_OUTPUT}"
+                exit 0
+              fi
+              declare -A pushed=()
+              while IFS= read -r commit; do
+                [[ "${commit}" =~ ^[0-9a-f]{40}$ ]]
+                pushed["${commit}"]=1
+              done <<< "${pushed_commits}"
+
+              # 沿推送分支的第一父链找到本次新增提交之前的基线。
+              ancestry="$(git rev-list --first-parent --max-count="$((${#pushed[@]} + 1))" "${PUSH_AFTER}")"
+              base=""
+              while IFS= read -r commit; do
+                if [[ -z "${pushed[${commit}]+x}" ]]; then
+                  base="${commit}"
+                  break
+                fi
+              done <<< "${ancestry}"
+              if [[ -z "${base}" ]]; then
+                base="$(git hash-object -w -t tree /dev/null)"
+              fi
+            elif ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+              git fetch --no-tags origin "${base}"
+            fi
+
+            diff_file="${RUNNER_TEMP}/docker-image-changes"
+            git diff --name-only --no-renames -z "${base}" "${PUSH_AFTER}" -- > "${diff_file}"
+            mapfile -d '' -t changed_paths < "${diff_file}"
+          fi
+
+          selected=()
+          while IFS='|' read -r image branch schedule paths; do
+            [[ -n "${image}" ]] || continue
+            case "${GITHUB_EVENT_NAME}" in
+              workflow_dispatch)
+                if [[ "${REQUESTED_IMAGE}" == all || "${REQUESTED_IMAGE}" == "${image}" ]]; then
+                  selected+=("${image}")
+                fi
+                ;;
+              schedule)
+                if [[ -n "${schedule}" && "${SCHEDULE}" == "${schedule}" ]]; then
+                  selected+=("${image}")
+                fi
+                ;;
+              push)
+                if [[ "${branch}" == main && "${GITHUB_REF}" != refs/heads/main ]]; then
+                  continue
+                fi
+                if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+                  selected+=("${image}")
+                  continue
+                fi
+                IFS='|' read -r -a patterns <<< "${paths}"
+                for path in "${changed_paths[@]}"; do
+                  for pattern in "${patterns[@]}"; do
+                    if [[ "${path}" == ${pattern} ]]; then
+                      selected+=("${image}")
+                      break 2
+                    fi
+                  done
+                done
+                ;;
+            esac
+          done <<< "${ROUTES}"
+
+          # 将已选镜像写入后续任务使用的 JSON 列表。
+          images="$(printf '%s\n' "${selected[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+          printf 'images=%s\n' "${images}" >> "${GITHUB_OUTPUT}"
+
+  # BEGIN image: hermes-agent
+  build_hermes_agent:
+    name: Build Hermes Agent
+    needs: plan
+    if: ${{ contains(fromJSON(needs.plan.outputs.images || '[]'), 'hermes-agent') }}
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: hermes-agent-ghcr
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    env:
+      # 禁止 docker/build-push-action 上传 .dockerbuild 构建记录 artifact。
+      DOCKER_BUILD_RECORD_UPLOAD: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check upstream image
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          upstream_image="docker.io/nousresearch/hermes-agent:latest"
+          target_image="ghcr.io/newyorkthink/hermes-agent:latest"
+
+          upstream_digest="$(docker buildx imagetools inspect "${upstream_image}" --format '{{json .Manifest}}' | jq -r '.digest // empty')"
+          [[ "${upstream_digest}" == sha256:* ]] || {
+            echo "无法读取上游镜像 digest。"
+            exit 1
+          }
+
+          current_base_digest=""
+          if current_image="$(docker buildx imagetools inspect "${target_image}" --format '{{json .Image}}' 2>/dev/null)"; then
+            current_base_digest="$(jq -r '
+              if .config? then
+                .config.Labels["org.opencontainers.image.base.digest"] // empty
+              else
+                [ .[]? | .config?.Labels?["org.opencontainers.image.base.digest"] // empty ]
+                | map(select(length > 0))
+                | first // empty
+              end
+            ' <<<"${current_image}")"
+          fi
+
+          echo "digest=${upstream_digest}" >> "${GITHUB_OUTPUT}"
+
+          if [[ "${GITHUB_EVENT_NAME}" != "schedule" ]]; then
+            echo "build=true" >> "${GITHUB_OUTPUT}"
+            echo "仓库变更或手动触发：执行构建。"
+          elif [[ "${current_base_digest}" == "${upstream_digest}" ]]; then
+            echo "build=false" >> "${GITHUB_OUTPUT}"
+            echo "上游镜像未更新：跳过构建。"
+          else
+            echo "build=true" >> "${GITHUB_OUTPUT}"
+            echo "检测到上游镜像更新：执行构建。"
+          fi
+
+      - name: Build and push latest
+        if: steps.upstream.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./hermes-agent
+          push: true
+          pull: true
+          no-cache: ${{ github.event_name == 'workflow_dispatch' }}
+          platforms: linux/amd64
+          tags: ghcr.io/newyorkthink/hermes-agent:latest
+          labels: org.opencontainers.image.source=https://github.com/newyorkthink/docker_images
+          build-args: |
+            UPSTREAM_DIGEST=${{ steps.upstream.outputs.digest }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
+  # END image: hermes-agent
+
+  # BEGIN image: paddleocr
+  build_paddleocr:
+    name: Build PaddleOCR
+    needs: plan
+    if: ${{ contains(fromJSON(needs.plan.outputs.images || '[]'), 'paddleocr') }}
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push PaddleOCR
+        uses: docker/build-push-action@v7
+        with:
+          context: ./paddleocr
+          file: ./paddleocr/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ghcr.io/newyorkthink/paddleocr:latest
+          labels: org.opencontainers.image.source=https://github.com/newyorkthink/docker_images
+          cache-from: type=gha,scope=paddleocr
+          cache-to: type=gha,mode=max,scope=paddleocr
+  # END image: paddleocr
+
+  # BEGIN image: spoofdpi
+  build_spoofdpi:
+    name: Build SpoofDPI
+    needs: plan
+    if: ${{ contains(fromJSON(needs.plan.outputs.images || '[]'), 'spoofdpi') }}
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push SpoofDPI
+        uses: docker/build-push-action@v7
+        with:
+          context: ./spoofdpi
+          push: true
+          platforms: linux/amd64
+          tags: ghcr.io/newyorkthink/spoofdpi:latest
+          labels: org.opencontainers.image.source=https://github.com/newyorkthink/docker_images
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  # END image: spoofdpi
+
+  # BEGIN image: umi-ocr
+  build_umi_ocr:
+    name: Build Umi-OCR
+    needs: plan
+    if: ${{ contains(fromJSON(needs.plan.outputs.images || '[]'), 'umi-ocr') }}
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Umi-OCR
+        uses: docker/build-push-action@v7
+        with:
+          context: ./umi-ocr
+          file: ./umi-ocr/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ghcr.io/newyorkthink/umi-ocr:latest
+          labels: org.opencontainers.image.source=https://github.com/newyorkthink/docker_images
+          cache-from: type=gha,scope=umi-ocr
+          cache-to: type=gha,mode=max,scope=umi-ocr
+  # END image: umi-ocr
+
+  # BEGIN image: whisper-cpp
+  build_whisper_cpp:
+    name: Build whisper.cpp
+    needs: plan
+    if: ${{ contains(fromJSON(needs.plan.outputs.images || '[]'), 'whisper-cpp') }}
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Checkout upstream whisper.cpp
+        uses: actions/checkout@v7
+        with:
+          repository: ggml-org/whisper.cpp
+          path: whisper-cpp/upstream
+          fetch-depth: 1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push whisper.cpp CPU
+        uses: docker/build-push-action@v7
+        with:
+          context: ./whisper-cpp/upstream
+          file: ./whisper-cpp/main.Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/newyorkthink/whisper-cpp:latest
+            ghcr.io/newyorkthink/whisper-cpp:cpu
+          labels: org.opencontainers.image.source=https://github.com/newyorkthink/docker_images
+          cache-from: type=gha,scope=whisper-cpp-cpu
+          cache-to: type=gha,mode=max,scope=whisper-cpp-cpu
+
+      - name: Build and push whisper.cpp Vulkan
+        uses: docker/build-push-action@v7
+        with:
+          context: ./whisper-cpp/upstream
+          file: ./whisper-cpp/main-vulkan.Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ghcr.io/newyorkthink/whisper-cpp:vulkan
+          labels: org.opencontainers.image.source=https://github.com/newyorkthink/docker_images
+          cache-from: type=gha,scope=whisper-cpp-vulkan
+          cache-to: type=gha,mode=max,scope=whisper-cpp-vulkan
+  # END image: whisper-cpp
+
+  # 定期删除七天前已经结束的 Actions 运行记录和日志。
+  # 不处理运行中或排队中的任务，也不影响 Release、标签和提交。
+  cleanup:
+    if: >-
+      ${{ github.event_name == 'schedule' && github.event.schedule == '43 2 * * *' ||
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.image == 'cleanup' }}
+    permissions:
+      actions: write
+      contents: read
+    concurrency:
+      group: cleanup-actions-runs
+      cancel-in-progress: false
+    name: Cleanup completed runs older than 7 days
+    runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
-      IMAGE: ${{ matrix.image }}
     steps:
-      - name: Dispatch image workflow
+      - name: 删除七天前已完成的运行记录
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          case "${IMAGE}" in
-            hermes-agent|paddleocr|spoofdpi|umi-ocr|whisper-cpp) ;;
-            *)
-              printf '未知镜像：%s\n' "${IMAGE}" >&2
-              exit 1
-              ;;
-          esac
+          cutoff="$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ')"
 
-          gh api --method POST \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
-            "/repos/${GITHUB_REPOSITORY}/actions/workflows/${IMAGE}.yml/dispatches" \
-            -f ref=main
+          # 完整查询成功后才读取列表，避免分页失败被误报为清理成功。
+          run_ids_text="$(
+            gh api --method GET --paginate \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs" \
+              -f status='completed' \
+              -f created="<${cutoff}" \
+              -f per_page=100 \
+              --jq '.workflow_runs[].id'
+          )"
+          run_ids=()
+          if [[ -n "$run_ids_text" ]]; then
+            mapfile -t run_ids <<< "$run_ids_text"
+          fi
+
+          if (( ${#run_ids[@]} == 0 )); then
+            printf '没有需要删除的运行记录。保留起点：%s\n' "${cutoff}"
+            exit 0
+          fi
+
+          printf '准备删除 %d 条早于 %s 的已完成运行记录。\n' "${#run_ids[@]}" "${cutoff}"
+
+          # 每条删除请求最多尝试五次，仅对服务端错误按递增间隔重试。
+          for run_id in "${run_ids[@]}"; do
+            for attempt in 1 2 3 4 5; do
+              if api_error="$(gh api --method DELETE --silent \
+                -H 'Accept: application/vnd.github+json' \
+                -H 'X-GitHub-Api-Version: 2022-11-28' \
+                "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" 2>&1)"; then
+                break
+              else
+                api_status=$?
+              fi
+
+              # 前次删除可能已经生效；仅在重试返回 404 时按已不存在处理。
+              if (( attempt > 1 )) && [[ "$api_error" == *"(HTTP 404)"* ]]; then
+                printf '运行记录 %s 在重试时已不存在，继续清理。\n' "$run_id"
+                break
+              fi
+
+              printf '%s\n' "$api_error" >&2
+              if [[ ! "$api_error" =~ HTTP[[:space:]]5[0-9][0-9] ]] || (( attempt == 5 )); then
+                exit "$api_status"
+              fi
+
+              retry_delay=$((5 * (2 ** (attempt - 1))))
+              printf '删除运行记录 %s 暂时失败，%d 秒后重试（已尝试 %d/5 次）。\n' \
+                "$run_id" "$retry_delay" "$attempt" >&2
+              sleep "$retry_delay"
+            done
+          done
+
+          printf '已删除 %d 条运行记录。\n' "${#run_ids[@]}"

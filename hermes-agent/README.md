@@ -40,7 +40,7 @@ ghcr.io/newyorkthink/hermes-agent:latest
 docker pull ghcr.io/newyorkthink/hermes-agent:latest
 ```
 
-该 GHCR Package 由当前 `newyorkthink/docker_images` 仓库的 `.github/workflows/hermes-agent.yml` 构建并发布。
+该 GHCR Package 由当前 `newyorkthink/docker_images` 仓库的 `.github/workflows/build-images.yml` 中的 Hermes Agent 任务构建并发布。
 
 GitHub Actions 只发布 `latest`，不上传 Docker Hub，不创建日期标签、提交 SHA 标签、Artifact 或 GitHub Release。
 
@@ -53,7 +53,7 @@ nousresearch/hermes-agent:latest
 构建规则：
 
 - 每 6 小时检查一次上游镜像 digest；未变化时跳过完整构建，发生变化时重新构建并覆盖 `latest`。
-- `main` 分支的 `hermes-agent/Dockerfile`、`hermes-agent/docker/**`、`hermes-agent/.dockerignore`、`.github/workflows/hermes-agent.yml` 发生变化时自动构建。
+- `main` 分支的 `hermes-agent/Dockerfile`、`hermes-agent/docker/**`、`hermes-agent/.dockerignore`发生变化时自动构建。
 - README 文档不在 push 构建路径中；单独修改 `hermes-agent/README.md` 不会触发镜像构建。
 - 支持 `workflow_dispatch` 手动触发。
 - 构建时把实际使用的上游 digest 写入镜像元数据。

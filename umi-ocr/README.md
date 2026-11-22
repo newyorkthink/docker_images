@@ -70,6 +70,6 @@ docker run -d \
 
 ## 自动构建
 
-独立工作流：`.github/workflows/umi-ocr.yml`
+构建入口为 `.github/workflows/build-images.yml` 中的 `umi-ocr` 任务。
 
-工作流在本目录或工作流文件发生变更时构建并推送镜像，也支持 `workflow_dispatch` 手动触发。只构建 `linux/amd64`，发布标签为 `latest`，构建缓存使用独立的 `umi-ocr` 范围。
+本目录发生变更时，工作流构建并推送镜像，也支持 `workflow_dispatch` 手动触发。只构建 `linux/amd64`，发布标签为 `latest`，构建缓存使用独立的 `umi-ocr` 范围。

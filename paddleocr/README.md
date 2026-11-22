@@ -52,6 +52,6 @@ ghcr.io/newyorkthink/paddleocr:latest
 
 ## 自动构建
 
-独立工作流：`.github/workflows/paddleocr.yml`
+构建入口为 `.github/workflows/build-images.yml` 中的 `paddleocr` 任务。
 
-工作流在本目录或工作流文件发生变更时构建并推送镜像，也支持 `workflow_dispatch` 手动触发。
+本目录发生变更时，工作流构建并推送镜像，也支持 `workflow_dispatch` 手动触发。

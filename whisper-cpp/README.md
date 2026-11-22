@@ -59,7 +59,7 @@ ghcr.io/newyorkthink/whisper-cpp:vulkan
 
 ## 自动构建
 
-独立工作流：`.github/workflows/whisper-cpp.yml`
+构建入口为 `.github/workflows/build-images.yml` 中的 `whisper-cpp` 任务。
 
 工作流会先获取一次当前上游 `ggml-org/whisper.cpp` 源码，再以同一份上游源码分别使用：
 
