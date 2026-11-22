@@ -111,10 +111,18 @@ function planArchive({ image, gitTree, rootReadme, archiveReadme, buildWorkflow 
 
   const cronLine = "    - cron: '" + route.schedule + "'";
   if (route.schedule) {
-    const cron = uniqueIndex(workflowLines, cronLine, "定时构建触发");
+    const schedule = uniqueIndex(workflowLines, "  schedule:", "定时触发区块");
+    let end = schedule + 1;
+    while (workflowLines[end]?.startsWith("    - cron: ")) {
+      end += 1;
+    }
+    const cron = schedule + 1 + uniqueIndex(workflowLines.slice(schedule + 1, end), cronLine, "定时构建触发");
     const shared = [...routes].some(([name, other]) => name !== image && other.schedule === route.schedule);
-    if (!shared && route.schedule !== "43 2 * * *") {
+    if (!shared) {
       remove.add(cron);
+      if (end === schedule + 2) {
+        remove.add(schedule);
+      }
     }
   }
 

@@ -25,4 +25,4 @@
 - [维护脚本](./scripts/README.md)提供仓库同步、提交说明、撤回和归档入口。
 - [文档索引](./docs/README.md)提供维护规则和实机验证记录模板。
 - [归档索引](./archive/README.md)记录已停用的镜像和恢复步骤。
-- **Actions 清理**每天删除创建超过七天且已结束的运行记录、日志和关联产物。手动清理时在构建入口选择 `cleanup`。
+- [Actions 清理](./.github/workflows/cleanup-actions-runs.yml)每天删除创建超过七天且已结束的运行记录、日志和关联产物。手动清理时打开独立的 **Cleanup Actions Runs**。
