@@ -14,6 +14,12 @@
 
 各镜像的上游来源、用途、构建差异和使用方式写在对应目录的 `README.md` 中。
 
+## 手动构建
+
+在 GitHub Actions 打开 [Build Docker Images](https://github.com/newyorkthink/docker_images/actions/workflows/build-images.yml)，点击 **Run workflow**，分支选 `main`。下拉框选 `all` 会并行触发上表的五个镜像工作流。单选时只触发对应镜像的工作流。各镜像仍按自己的工作流构建和推送 GHCR 标签。
+
+在 **Build Docker Images** 查看分发结果，在各镜像的 Actions 运行记录查看构建和推送结果。新增、归档或恢复镜像时，同步更新手动入口的目标名单。
+
 ## 维护
 
 - [维护脚本](./scripts/README.md)提供仓库同步、提交说明、撤回和归档入口。
